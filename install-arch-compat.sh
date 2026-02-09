@@ -1,377 +1,169 @@
 #!/bin/bash
 
-# Arch Linux Post-Installation Compatibility Script
-# Run as root or with sudo after barebones Arch installation
+# Arch Linux Post-Install Setup Script
+# Installs essential packages for hardware/software compatibility and performance
 
-set -euo pipefail
+set -e  # Exit on error
 
-# Colors for output
+# Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-log() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
 # Check if running as root
 if [[ $EUID -ne 0 ]]; then
-   error "This script must be run as root (use sudo)"
-   exit 1
+    echo -e "${RED}Error: This script must be run as root${NC}"
+    exit 1
 fi
+
+# Function for colored output
+print_status() {
+    echo -e "${GREEN}[*]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[!]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[x]${NC} $1"
+}
 
 # Update system first
-log "Updating system..."
+print_status "Updating system packages..."
 pacman -Syu --noconfirm
 
-# Enable multilib repository for 32-bit compatibility
-log "Enabling multilib repository..."
-if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
-    cat >> /etc/pacman.conf << 'EOF'
+# Install essential hardware support packages
+print_status "Installing hardware support packages..."
 
-[multilib]
-Include = /etc/pacman.d/mirrorlist
-EOF
-    pacman -Sy
-fi
+# CPU microcode (both Intel and AMD)
+pacman -S --noconfirm amd-ucode intel-ucode
 
-# Install Liquorix kernel (performance-optimized)
-log "Installing Liquorix kernel..."
+# Firmware packages
+pacman -S --noconfirm linux-firmware sof-firmware
+
+# Basic drivers and utilities
+pacman -S --noconfirm \
+    mesa \
+    vulkan-radeon vulkan-intel vulkan-icd-loader \
+    libva-mesa-driver mesa-vdpau intel-media-driver \
+    xf86-video-amdgpu xf86-video-ati xf86-video-intel xf86-video-nouveau \
+    xf86-input-libinput \
+    alsa-utils pulseaudio pulseaudio-alsa pavucontrol \
+    bluez bluez-utils \
+    networkmanager network-manager-applet wpa_supplicant \
+    git curl wget base-devel
+
+# Performance and compatibility utilities
+print_status "Installing performance and system utilities..."
+
+pacman -S --noconfirm \
+    cpupower thermald lm_sensors \
+    dmidecode pciutils usbutils \
+    f2fs-tools btrfs-progs xfsprogs ntfs-3g exfatprogs \
+    smartmontools hdparm \
+    acpi acpid \
+    cronie \
+    neofetch htop btop \
+    unzip unrar p7zip \
+    gvfs gvfs-mtp gvfs-smb \
+    ntfs-3g exfat-utils \
+    man-db man-pages \
+    bash-completion \
+    nano vim \
+    openssh \
+    cups cups-pdf \
+    sane sane-airscan \
+    tlp ethtool
+
+# Install Liquorix kernel
+print_status "Installing Liquorix kernel..."
 curl -s 'https://liquorix.net/install-liquorix.sh' | bash
 
-# Hardware compatibility - CPU microcode
-log "Installing CPU microcode..."
-if grep -q "Intel" /proc/cpuinfo; then
-    pacman -S --noconfirm intel-ucode
-elif grep -q "AMD" /proc/cpuinfo; then
-    pacman -S --noconfirm amd-ucode
-fi
-
-# Essential firmware
-log "Installing firmware..."
-pacman -S --noconfirm linux-firmware
-
-# Hardware detection and drivers
-log "Installing hardware detection tools..."
-pacman -S --noconfirm pciutils usbutils dmidecode lshw
-
-# Graphics drivers (detect and install appropriate ones)
-log "Detecting and installing graphics drivers..."
-
-# Check for NVIDIA
-if lspci | grep -i nvidia > /dev/null; then
-    warn "NVIDIA GPU detected - installing proprietary drivers"
-    pacman -S --noconfirm nvidia nvidia-utils nvidia-settings
-    # For 32-bit compatibility
-    pacman -S --noconfirm lib32-nvidia-utils
-fi
-
-# Check for AMD/ATI
-if lspci | grep -i "amd\|ati" > /dev/null; then
-    log "AMD GPU detected - installing open-source drivers"
-    pacman -S --noconfirm xf86-video-amdgpu vulkan-radeon libva-mesa-driver mesa-vdpau
-    pacman -S --noconfirm lib32-mesa lib32-vulkan-radeon
-fi
-
-# Check for Intel
-if lspci | grep -i "intel.*graphics" > /dev/null; then
-    log "Intel GPU detected"
-    pacman -S --noconfirm xf86-video-intel vulkan-intel intel-media-driver
-    pacman -S --noconfirm lib32-mesa lib32-vulkan-intel
-fi
-
-# Base utilities
-log "Installing base utilities..."
-pacman -S --noconfirm \
-    base-devel \
-    git \
-    wget \
-    curl \
-    man-db \
-    man-pages \
-    texinfo \
-    sudo \
-    which \
-    file \
-    findutils \
-    grep \
-    sed \
-    awk \
-    tar \
-    gzip \
-    bzip2 \
-    xz \
-    zip \
-    unzip \
-    p7zip \
-    unrar
-
-# Networking essentials
-log "Installing networking tools..."
-pacman -S --noconfirm \
-    networkmanager \
-    network-manager-applet \
-    dhcpcd \
-    iwd \
-    openssh \
-    rsync \
-    traceroute \
-    bind \
-    whois \
-    nmap \
-    net-tools \
-    inetutils \
-    ethtool \
-    wireless_tools \
-    wpa_supplicant
-
-# Audio system (PipeWire - modern standard)
-log "Installing audio system (PipeWire)..."
-pacman -S --noconfirm \
-    pipewire \
-    pipewire-alsa \
-    pipewire-pulse \
-    pipewire-jack \
-    wireplumber \
-    pavucontrol \
-    alsa-utils \
-    alsa-plugins
-
-# Bluetooth
-log "Installing Bluetooth support..."
-pacman -S --noconfirm \
-    bluez \
-    bluez-utils \
-    blueman
-
-# Printing support
-log "Installing printing support..."
-pacman -S --noconfirm \
-    cups \
-    cups-pdf \
-    ghostscript \
-    gsfonts \
-    foomatic-db-engine \
-    foomatic-db-gutenprint-ppds \
-    gutenprint \
-    system-config-printer
-
-# File systems support
-log "Installing filesystem support..."
-pacman -S --noconfirm \
-    dosfstools \
-    ntfs-3g \
-    exfatprogs \
-    btrfs-progs \
-    xfsprogs \
-    reiserfsprogs \
-    jfsutils \
-    nfs-utils \
-    samba \
-    cifs-utils \
-    sshfs \
-    fuse3
-
-# Archive formats
-log "Installing additional archive support..."
-pacman -S --noconfirm \
-    unarchiver \
-    lrzip \
-    lzop \
-    zstd
-
-# Hardware monitoring and sensors
-log "Installing hardware monitoring..."
-pacman -S --noconfirm \
-    lm_sensors \
-    dmidecode \
-    smartmontools \
-    hdparm \
-    nvme-cli
-
-# Power management
-log "Installing power management..."
-pacman -S --noconfirm \
-    tlp \
-    tlp-rdw \
-    powertop
-
-# Fonts (essential only)
-log "Installing essential fonts..."
-pacman -S --noconfirm \
-    noto-fonts \
-    noto-fonts-cjk \
-    noto-fonts-emoji \
-    noto-fonts-extra \
-    ttf-liberation \
-    ttf-dejavu \
-    ttf-roboto \
-    ttf-font-awesome
-
-# Input method (for international users)
-log "Installing input method support..."
-pacman -S --noconfirm \
-    fcitx5 \
-    fcitx5-configtool \
-    fcitx5-gtk \
-    fcitx5-qt \
-    fcitx5-unikey \
-    fcitx5-chinese-addons
-
-# Essential libraries (32-bit compatibility for gaming/proprietary software)
-log "Installing 32-bit libraries..."
-pacman -S --noconfirm \
-    lib32-gcc-libs \
-    lib32-glibc \
-    lib32-zlib \
-    lib32-bzip2 \
-    lib32-libstdc++5 \
-    lib32-openssl \
-    lib32-libx11 \
-    lib32-libxcb \
-    lib32-libxext \
-    lib32-libxinerama \
-    lib32-libxrandr \
-    lib32-libxss \
-    lib32-libxtst \
-    lib32-libdrm \
-    lib32-libglvnd \
-    lib32-libpulse \
-    lib32-alsa-lib \
-    lib32-alsa-plugins \
-    lib32-libusb \
-    lib32-nspr \
-    lib32-nss \
-    lib32-gtk2 \
-    lib32-gtk3 \
-    lib32-pango \
-    lib32-cairo \
-    lib32-freetype2 \
-    lib32-fontconfig \
-    lib32-libpng \
-    lib32-libjpeg-turbo \
-    lib32-libtiff \
-    lib32-libxml2 \
-    lib32-expat \
-    lib32-dbus \
-    lib32-systemd \
-    lib32-curl \
-    lib32-libffi \
-    lib32-gettext \
-    lib32-harfbuzz \
-    lib32-libcups \
-    lib32-libgcrypt \
-    lib32-libgpg-error \
-    lib32-lz4 \
-    lib32-xz \
-    lib32-zstd \
-    lib32-vulkan-icd-loader
-
-# Multimedia codecs
-log "Installing multimedia codecs..."
-pacman -S --noconfirm \
-    ffmpeg \
-    ffmpegthumbnailer \
-    gst-plugins-base \
-    gst-plugins-good \
-    gst-plugins-bad \
-    gst-plugins-ugly \
-    gst-libav \
-    gstreamer-vaapi \
-    libva-utils \
-    vdpauinfo \
-    mesa-demos \
-    vulkan-tools
-
-# Additional hardware support
-log "Installing additional hardware support..."
-
-# Touchpad support
-pacman -S --noconfirm xf86-input-libinput
-
-# Tablet/Wacom support
-pacman -S --noconfirm xf86-input-wacom libwacom
-
-# Webcam support
-pacman -S --noconfirm v4l-utils
-
-# Scanner support
-pacman -S --noconfirm sane sane-airscan
+# Install systemd services for performance
+print_status "Configuring system services..."
 
 # Enable essential services
-log "Enabling system services..."
-systemctl enable NetworkManager
-systemctl enable bluetooth
-systemctl enable cups.socket
-systemctl enable tlp
-systemctl enable fstrim.timer
-systemctl enable reflector.timer 2>/dev/null || true
+systemctl enable --now NetworkManager
+systemctl enable --now bluetooth
+systemctl enable --now cpupower
+systemctl enable --now thermald
+systemctl enable --now cronie
+systemctl enable --now acpid
+systemctl enable --now tlp
+systemctl enable --now cups
+systemctl enable --now sshd
 
-# Configure mkinitcpio for Liquorix and microcode
-log "Configuring initramfs..."
-if grep -q "intel-ucode" /proc/cpuinfo 2>/dev/null || [[ -f /boot/intel-ucode.img ]]; then
-    sed -i 's/^HOOKS=(base udev/HOOKS=(base udev microcode/' /etc/mkinitcpio.conf
-fi
-mkinitcpio -P
+# Configure cpupower for performance
+cpupower frequency-set -g performance
 
-# Install bootloader entries for Liquorix
-log "Updating bootloader..."
-if [[ -d /boot/loader/entries ]]; then
-    # systemd-boot
-    log "Detected systemd-boot, creating entry for Liquorix..."
-    # Entry will be created automatically by install script, but ensure it's there
-    bootctl update
-elif [[ -f /boot/grub/grub.cfg ]]; then
-    # GRUB
-    log "Detected GRUB, regenerating config..."
-    grub-mkconfig -o /boot/grub/grub.cfg
-fi
+# Create basic directories for user compatibility
+print_status "Creating user directories..."
+mkdir -p /etc/skel/{Desktop,Documents,Downloads,Music,Pictures,Public,Templates,Videos}
 
-# AUR helper setup (yay - for packages not in official repos)
-log "Installing yay AUR helper..."
-cd /tmp
-git clone https://aur.archlinux.org/yay.git
-cd yay
-makepkg -si --noconfirm
+# Install development tools for compatibility
+print_status "Installing development tools for software compatibility..."
+pacman -S --noconfirm \
+    python python-pip \
+    nodejs npm \
+    jre-openjdk jdk-openjdk \
+    go \
+    rust \
+    docker docker-compose \
+    flatpak snapd
 
-# Install additional firmware from AUR if needed
-log "Installing additional firmware from AUR..."
-yay -S --noconfirm \
-    upd72020x-fw \
-    aic94xx-firmware \
-    wd719x-firmware \
-    linux-firmware-whence \
-    mkinitcpio-firmware || true
+# Enable docker and snapd services
+systemctl enable --now docker
+systemctl enable --now snapd.socket
 
-# Cleanup
-log "Cleaning up..."
-rm -rf /tmp/yay
+# Install additional codecs
+print_status "Installing multimedia codecs..."
+pacman -S --noconfirm \
+    gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly \
+    gst-libav \
+    ffmpeg ffmpegthumbs \
+    flac faac faad2 \
+    jasper libdvdcss libdvdread libdvdnav
+
+# Install fonts for better compatibility
+print_status "Installing font packages..."
+pacman -S --noconfirm \
+    noto-fonts noto-fonts-cjk noto-fonts-emoji noto-fonts-extra \
+    ttf-dejavu ttf-liberation ttf-opensans \
+    freetype2
+
+# Install printing support
+pacman -S --noconfirm system-config-printer
+
+# Configure sudo for user convenience (uncomment to enable)
+# print_status "Configuring sudo..."
+# echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/10-wheel
+
+# Clean up
+print_status "Cleaning up..."
 pacman -Sc --noconfirm
 
-# Final message
+# Update initramfs for new kernel
+print_status "Updating initramfs..."
+mkinitcpio -P
+
+print_status "Installation complete!"
+print_warning "Please note:"
+echo "1. Reboot to use the Liquorix kernel"
+echo "2. Install your preferred desktop environment/window manager"
+echo "3. Install DankMaterialShell or your preferred shell"
+echo "4. Configure user-specific settings"
 echo ""
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  Installation Complete!${NC}"
-echo -e "${GREEN}========================================${NC}"
+echo "For NVIDIA users, consider installing:"
+echo "  nvidia nvidia-utils nvidia-settings"
 echo ""
-echo "System is now configured for maximum compatibility."
-echo ""
-echo "Next steps:"
-echo "1. Reboot to load Liquorix kernel"
-echo "2. Install your custom shell (DankMaterialShell)"
-echo "3. Configure your desktop environment"
-echo ""
-echo "Post-reboot checks:"
-echo "- Run 'sensors-detect' as root to configure hardware sensors"
-echo "- Run 'mkinitcpio -P' if you modify kernel modules"
-echo ""
-echo -e "${YELLOW}Note: Some proprietary drivers may require additional configuration${NC}"
+echo "For VirtualBox guests, install:"
+echo "  virtualbox-guest-utils"
+
+# Prompt for reboot
+read -p "Reboot now? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    reboot
+fi
