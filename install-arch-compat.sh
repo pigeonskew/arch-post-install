@@ -1,6 +1,6 @@
 #!/bin/bash
-# Arch Linux automated installer with maximum compatibility & performance
-# Run from Arch live environment as root. All data on target disk will be lost.
+# Arch Linux automated installer (interactive) – safe to share on GitHub
+# Run from Arch live environment as root.
 
 set -e
 trap 'echo "Error on line $LINENO. Unmounting..." && umount -R /mnt 2>/dev/null' ERR
@@ -160,7 +160,7 @@ sed -i 's/^#$LOCALE/$LOCALE/' /etc/locale.gen
 locale-gen
 echo "LANG=$LOCALE" > /etc/locale.conf
 
-# Hostname
+# Hostname (this writes to /etc/hostname, NOT the hostname command)
 echo "$HOSTNAME" > /etc/hostname
 cat > /etc/hosts <<HOSTS
 127.0.0.1   localhost
