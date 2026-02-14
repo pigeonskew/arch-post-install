@@ -2,37 +2,90 @@
 # Arch Linux automated installer with maximum compatibility & performance
 # Run from Arch live environment as root. All data on target disk will be lost.
 
-set -e  # exit on error
+set -e
 trap 'echo "Error on line $LINENO. Unmounting..." && umount -R /mnt 2>/dev/null' ERR
 
-# ------------------- CONFIGURATION (edit these) -------------------
-DISK="/dev/vda"               # Target disk (will be completely wiped!)
-HOSTNAME="ominoussagePC"            # Desired hostname
-USERNAME="ominoussage"               # Regular username
-PASSWORD="tsuchiya145609"           # TEMPORARY password (change after first boot)
-TIMEZONE="Asia/Manila"   # Use "timedatectl list-timezones" to find yours
-LOCALE="en_US.UTF-8"          # System locale
-# -------------------------------------------------------------------
+# --- Helper functions for interactive prompts ---
+prompt_string() {
+    local var_name="$1"
+    local prompt_text="$2"
+    local default="$3"
+    local value
+    if [ -n "$default" ]; then
+        read -rp "$prompt_text [$default]: " value
+        value="${value:-$default}"
+    else
+        read -rp "$prompt_text: " value
+    fi
+    eval "$var_name=\"$value\""
+}
 
-# Root check
+prompt_password() {
+    local var_name="$1"
+    local prompt_text="$2"
+    local password password_confirm
+    while true; do
+        read -rsp "$prompt_text: " password
+        echo
+        read -rsp "Confirm password: " password_confirm
+        echo
+        if [ "$password" = "$password_confirm" ]; then
+            break
+        else
+            echo "Passwords do not match. Try again."
+        fi
+    done
+    eval "$var_name=\"$password\""
+}
+
+# --- Root check ---
 if [ "$EUID" -ne 0 ]; then
     echo "Please run as root."
     exit 1
 fi
 
-# Internet check
+# --- Internet check ---
 ping -c 1 archlinux.org >/dev/null 2>&1 || { echo "No internet connection."; exit 1; }
 
-# Verify disk exists
-if [ ! -b "$DISK" ]; then
-    echo "Disk $DISK does not exist."
-    exit 1
-fi
+# --- Interactive configuration ---
+echo "Welcome to the Arch Linux automated installer."
+echo "Please provide the following configuration details."
+echo
 
-echo "Installing to $DISK. ALL DATA WILL BE WIPED."
+# List available disks
+echo "Available disks:"
+lsblk -d -o NAME,SIZE,MODEL | grep -v "loop"
+echo
+
+# Prompt for disk
+while true; do
+    prompt_string DISK "Enter the target disk (e.g., /dev/sda)" ""
+    if [ -b "$DISK" ]; then
+        break
+    else
+        echo "Disk $DISK does not exist. Please enter a valid disk."
+    fi
+done
+
+prompt_string HOSTNAME "Enter hostname" "archbox"
+prompt_string USERNAME "Enter username for regular user" "user"
+prompt_password PASSWORD "Enter password for user and root (temporary)"
+
+prompt_string TIMEZONE "Enter timezone (e.g., America/New_York)" "America/New_York"
+prompt_string LOCALE "Enter locale (e.g., en_US.UTF-8)" "en_US.UTF-8"
+
+echo
+echo "Installation will be performed with the following settings:"
+echo "  Disk:       $DISK"
+echo "  Hostname:   $HOSTNAME"
+echo "  Username:   $USERNAME"
+echo "  Timezone:   $TIMEZONE"
+echo "  Locale:     $LOCALE"
+echo "  (Password hidden)"
+echo
 read -rp "Press Enter to continue or Ctrl+C to abort."
 
-# Detect UEFI or BIOS
+# --- Detect UEFI or BIOS ---
 if [ -d /sys/firmware/efi ]; then
     EFI_MODE=1
     echo "UEFI mode detected."
@@ -41,7 +94,7 @@ else
     echo "BIOS mode detected (Legacy)."
 fi
 
-# Partition disk (GPT)
+# --- Partition disk (GPT) ---
 echo "Partitioning $DISK..."
 parted -s "$DISK" mklabel gpt
 if [ $EFI_MODE -eq 1 ]; then
@@ -56,45 +109,44 @@ else
     ROOT_PART="${DISK}1"
 fi
 
-# Format partitions
+# --- Format partitions ---
 echo "Formatting partitions..."
 if [ $EFI_MODE -eq 1 ]; then
     mkfs.fat -F32 "$EFI_PART"
 fi
 mkfs.ext4 -F "$ROOT_PART"
 
-# Mount root
+# --- Mount partitions ---
 mount "$ROOT_PART" /mnt
-
 if [ $EFI_MODE -eq 1 ]; then
     mkdir -p /mnt/boot
     mount "$EFI_PART" /mnt/boot
 fi
 
-# Install base system + compatibility/performance packages
+# --- Install base system + compatibility/performance packages ---
 echo "Installing base system and additional packages..."
 pacstrap /mnt \
     base base-devel \
-    linux-firmware            # firmware for most hardware
-    amd-ucode intel-ucode     # CPU microcode
-    mesa vulkan-radeon vulkan-intel vulkan-icd-loader  # GPU drivers & Vulkan
-    xf86-video-amdgpu xf86-video-intel xf86-video-nouveau # open-source GPU drivers
-    pipewire pipewire-alsa pipewire-pulse wireplumber    # audio
-    alsa-firmware sof-firmware                           # audio firmware
-    ntfs-3g exfatprogs dosfstools                         # filesystem tools
-    bluez bluez-utils                                     # bluetooth
-    networkmanager vim sudo git                           # basic tools
-    tuned irqbalance earlyoom                             # performance tweaks
-    open-vm-tools qemu-guest-agent                        # VM guest agents
-    limine                                                # bootloader
+    linux-firmware \
+    amd-ucode intel-ucode \
+    mesa vulkan-radeon vulkan-intel vulkan-icd-loader \
+    xf86-video-amdgpu xf86-video-intel xf86-video-nouveau \
+    pipewire pipewire-alsa pipewire-pulse wireplumber \
+    alsa-firmware sof-firmware \
+    ntfs-3g exfatprogs dosfstools \
+    bluez bluez-utils \
+    networkmanager vim sudo git \
+    tuned irqbalance earlyoom \
+    open-vm-tools qemu-guest-agent \
+    limine
 
-# Generate fstab
+# --- Generate fstab ---
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# Get root partition UUID for bootloader config
+# --- Get root partition UUID ---
 ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
 
-# Chroot and configure
+# --- Chroot and configure ---
 echo "Configuring system in chroot..."
 arch-chroot /mnt /bin/bash <<EOF
 set -e
@@ -116,7 +168,7 @@ cat > /etc/hosts <<HOSTS
 127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
 HOSTS
 
-# Network
+# Enable network manager
 systemctl enable NetworkManager
 
 # Set passwords
@@ -131,8 +183,7 @@ echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
 systemctl enable tuned irqbalance earlyoom
 # Enable guest agents (they start automatically if running in respective VM)
 systemctl enable vmtoolsd qemu-guest-agent
-
-# Bluetooth (disabled by default; user can start if needed)
+# Enable bluetooth (disabled by default; user can start if needed)
 systemctl enable bluetooth
 
 # Install liquorix kernel (script adds repo and installs kernel + headers)
@@ -165,7 +216,7 @@ LIMINE
 
 EOF
 
-# Unmount and finish
+# --- Unmount and finish ---
 echo "Installation complete. Unmounting..."
 umount -R /mnt
 echo "You can now reboot. After reboot, log in and change passwords immediately."
