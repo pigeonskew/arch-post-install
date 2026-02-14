@@ -21,8 +21,7 @@ verify_arch() {
 }
 
 set_keyboard() {
-    # Simple prompt without pager to avoid user confusion
-    read -rp "Enter keyboard layout (e.g., us, de, es): " KEYMAP
+    read -rp "Enter keyboard layout (e.g., us, de): " KEYMAP
     loadkeys "$KEYMAP"
 }
 
@@ -31,7 +30,6 @@ connect_wifi() {
     if [[ "$WIFI_CHOICE" == "y" ]]; then
         iwctl
     fi
-    # Check connection
     if ! ping -c 1 archlinux.org &> /dev/null; then
         echo "No internet connection. Exiting."
         exit 1
@@ -66,7 +64,7 @@ main() {
         set 1 esp on \
         mkpart root ext4 513MiB 100%
 
-    # Define partition names based on disk type
+    # Define partition names
     if [[ "$DISK" =~ "nvme" ]]; then
         BOOT_PART="${DISK}p1"
         ROOT_PART="${DISK}p2"
@@ -79,7 +77,7 @@ main() {
     echo "Formatting partitions..."
     mkfs.fat -F32 "$BOOT_PART"
     
-    read -rp "Use BTRFS for root? (Recommended for performance/snapshots) (y/n): " FS_CHOICE
+    read -rp "Use BTRFS for root? (Recommended for performance) (y/n): " FS_CHOICE
     if [[ "$FS_CHOICE" == "y" ]]; then
         FS_TYPE="btrfs"
         mkfs.btrfs -f "$ROOT_PART"
@@ -105,7 +103,7 @@ main() {
     arch-chroot /mnt ln -sf /usr/share/zoneinfo/"$TIMEZONE" /etc/localtime
     arch-chroot /mnt hwclock --systohc
 
-    # Locales (Max 2)
+    # Locales
     echo "Configuring locales..."
     echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
     read -rp "Enter a second locale (e.g., de_DE.UTF-8) or press Enter to skip: " LOC2
@@ -132,45 +130,25 @@ main() {
     read -rp "Enter user password: " USERPASS
     arch-chroot /mnt echo "$USERNAME:$USERPASS" | chpasswd
     
-    # Sudoers setup
     echo "%wheel ALL=(ALL:ALL) ALL" > /mnt/etc/sudoers.d/wheel
 
-    # --- Performance & Compatibility Setup ---
+    # --- Performance & Compatibility ---
     
     echo "Installing Liquorix Kernel..."
-    # Install dependencies first
     arch-chroot /mnt pacman -S --noconfirm curl
-    # Run the Liquorix install script as requested
     arch-chroot /mnt bash -c "curl -s 'https://liquorix.net/install-liquorix.sh' | bash"
 
-    echo "Installing essential packages for hardware compatibility..."
-    # Essential Firmware
+    echo "Installing essential packages..."
     arch-chroot /mnt pacman -S --noconfirm --needed \
-        linux-firmware \
-        sof-firmware \
-        bluez \
-        bluez-utils \
-        cups \
-        avahi \
-        xdg-utils \
-        gvfs \
-        gvfs-mtp \
-        udisks2 \
-        ntfs-3g \
-        exfatprogs \
-        bash-completion
+        linux-firmware sof-firmware bluez bluez-utils cups avahi \
+        xdg-utils gvfs gvfs-mtp udisks2 ntfs-3g exfatprogs bash-completion
 
-    # Performance Tweaks
-    echo "Applying performance tweaks..."
-    # I/O Scheduler (BFQ for SSDs/HDDs responsiveness)
+    # I/O Scheduler Tweaks
     cat <<EOF > /mnt/etc/udev/rules.d/60-ioschedulers.rules
-# Set scheduler for NVMe
 ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]", ATTR{queue/scheduler}="none"
-# Set scheduler for SSDs and HDDs
 ACTION=="add|change", KERNEL=="sd[a-z]|mmcblk[0-9]*", ATTR{queue/scheduler}="bfq"
 EOF
 
-    # Enable services
     arch-chroot /mnt systemctl enable NetworkManager systemd-resolved
     arch-chroot /mnt systemctl enable bluetooth cups avahi-daemon
 
@@ -178,7 +156,7 @@ EOF
     echo "Installing Limine..."
     arch-chroot /mnt pacman -S --noconfirm limine
 
-    # Install Limine to the disk (boot sector/MBR gap for hybrid boot safety)
+    # Install Limine to the disk
     arch-chroot /mnt limine-install "$DISK"
 
     # Detect Microcode
@@ -202,29 +180,31 @@ timeout: 5
     kernel_cmdline: root=UUID=$ROOT_UUID rw $UCODE_INITRD initrd=/initramfs-linux-lqx.img quiet
 EOF
 
-    # FIX: Register Limine as a UEFI Boot Entry
-    # This solves the issue of booting straight to UEFI settings
-    echo "Registering Limine in UEFI Boot Manager..."
-    
-    # Remove existing entry if it exists to avoid duplicates
+    # --- FIX: Setup EFI Fallback Path ---
+    # This ensures the system boots even if NVRAM entry is ignored
+    echo "Setting up EFI fallback path..."
+    mkdir -p /mnt/boot/EFI/BOOT
+    cp /mnt/boot/limine-uefix64.efi /mnt/boot/EFI/BOOT/BOOTX64.EFI
+
+    # Register in NVRAM
+    echo "Registering Limine in UEFI..."
+    if [[ "$DISK" =~ "nvme" ]]; then
+        EFI_DISK="${DISK%p*}"
+        PART_NUM="${BOOT_PART##*p}"
+    else
+        EFI_DISK="$DISK"
+        PART_NUM="${BOOT_PART##*[a-z]}"
+    fi
+
+    # Remove old entry if exists
     BOOT_ENTRY_NUM=$(efibootmgr | grep "Limine" | sed 's/Boot\([0-9]*\)\*.*/\1/')
     if [[ -n "$BOOT_ENTRY_NUM" ]]; then
         efibootmgr -b "$BOOT_ENTRY_NUM" -B
     fi
-    
-    # Determine the EFI disk and partition number for efibootmgr
-    if [[ "$DISK" =~ "nvme" ]]; then
-        EFI_DISK="${DISK%p*}" # Remove partition suffix (e.g. p1) -> nvme0n1
-        PART_NUM="${BOOT_PART##*p}" # Get number after p (e.g. 1)
-    else
-        EFI_DISK="$DISK"
-        PART_NUM="${BOOT_PART##*[a-z]}" # Get number after letter (e.g. sda1 -> 1)
-    fi
 
     efibootmgr --create --disk "$EFI_DISK" --part "$PART_NUM" --loader /limine-uefix64.efi --label "Limine"
 
-    echo "Installation complete."
-    echo "You may now reboot into your new system."
+    echo "Installation complete. Rebooting should now load Limine correctly."
 }
 
 main
