@@ -99,15 +99,20 @@ echo "Partitioning $DISK..."
 parted -s "$DISK" mklabel gpt
 if [ $EFI_MODE -eq 1 ]; then
     # UEFI: 512 MiB EFI partition, rest for root
-    parted -s "$DISK" mkpart primary fat32 1MiB 512MiB set 1 esp on
+    parted -s "$DISK" mkpart primary fat32 1MiB 512MiB
+    parted -s "$DISK" set 1 esp on
     parted -s "$DISK" mkpart primary ext4 512MiB 100%
     EFI_PART="${DISK}1"
     ROOT_PART="${DISK}2"
 else
     # BIOS: single root partition (boot flag helps some firmware)
-    parted -s "$DISK" mkpart primary ext4 1MiB 100% set 1 boot on
+    parted -s "$DISK" mkpart primary ext4 1MiB 100%
+    parted -s "$DISK" set 1 boot on
     ROOT_PART="${DISK}1"
 fi
+
+# Wait for partition table to update
+sleep 2
 
 # --- Format partitions ---
 echo "Formatting partitions..."
@@ -148,33 +153,33 @@ ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
 
 # --- Chroot and configure ---
 echo "Configuring system in chroot..."
-arch-chroot /mnt /bin/bash <<EOF
+arch-chroot /mnt /bin/bash <<'EOF'
 set -e
 
 # Timezone
-ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+ln -sf /usr/share/zoneinfo/'"$TIMEZONE"' /etc/localtime
 hwclock --systohc
 
 # Locale
-sed -i 's/^#$LOCALE/$LOCALE/' /etc/locale.gen
+sed -i 's/^#'"$LOCALE"'/'"$LOCALE"'/' /etc/locale.gen
 locale-gen
-echo "LANG=$LOCALE" > /etc/locale.conf
+echo "LANG='"$LOCALE"'" > /etc/locale.conf
 
-# Hostname (this writes to /etc/hostname, NOT the hostname command)
-echo "$HOSTNAME" > /etc/hostname
+# Hostname
+echo "'"$HOSTNAME"'" > /etc/hostname
 cat > /etc/hosts <<HOSTS
 127.0.0.1   localhost
 ::1         localhost
-127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
+127.0.1.1   '"$HOSTNAME"'.localdomain '"$HOSTNAME"'
 HOSTS
 
 # Enable network manager
 systemctl enable NetworkManager
 
 # Set passwords
-echo "root:$PASSWORD" | chpasswd
-useradd -m -G wheel "$USERNAME"
-echo "$USERNAME:$PASSWORD" | chpasswd
+echo "root:'"$PASSWORD"'" | chpasswd
+useradd -m -G wheel '"$USERNAME"'
+echo "'"$USERNAME"':'"$PASSWORD"'" | chpasswd
 
 # Sudo
 echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
@@ -190,14 +195,14 @@ systemctl enable bluetooth
 curl -s 'https://liquorix.net/install-liquorix.sh' | bash
 
 # --- Limine bootloader setup ---
-if [ $EFI_MODE -eq 1 ]; then
+if [ '"$EFI_MODE"' -eq 1 ]; then
     # UEFI: copy EFI executable and limine.sys to /boot (EFI partition)
     mkdir -p /boot/EFI/BOOT
     cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI
     cp /usr/share/limine/limine.sys /boot/
 else
     # BIOS: install limine to disk MBR and copy limine.sys to /boot
-    limine bios-install "$DISK"
+    limine bios-install '"$DISK"'
     cp /usr/share/limine/limine.sys /boot/
 fi
 
@@ -210,7 +215,7 @@ timeout: 5
     comment=Boot with liquorix kernel
     protocol=linux
     kernel_path = boot:///vmlinuz-linux-liquorix
-    kernel_cmdline = root=UUID=$ROOT_UUID rw
+    kernel_cmdline = root=UUID='"$ROOT_UUID"' rw
     initrd_path = boot:///amd-ucode.img boot:///intel-ucode.img boot:///initramfs-linux-liquorix.img
 LIMINE
 
