@@ -1,13 +1,13 @@
 #!/bin/bash
-# Arch Linux automated installer with Limine bootloader and liquorix kernel
-# Run this script from the Arch Linux live environment as root.
+# Arch Linux automated installer with maximum compatibility & performance
+# Run from Arch live environment as root. All data on target disk will be lost.
 
-set -e  # exit on any error
+set -e  # exit on error
 trap 'echo "Error on line $LINENO. Unmounting..." && umount -R /mnt 2>/dev/null' ERR
 
 # ------------------- CONFIGURATION (edit these) -------------------
 DISK="/dev/vda"               # Target disk (will be completely wiped!)
-HOSTNAME="ominoussage"            # Desired hostname
+HOSTNAME="ominoussagePC"            # Desired hostname
 USERNAME="ominoussage"               # Regular username
 PASSWORD="tsuchiya145609"           # TEMPORARY password (change after first boot)
 TIMEZONE="Asia/Manila"   # Use "timedatectl list-timezones" to find yours
@@ -71,9 +71,22 @@ if [ $EFI_MODE -eq 1 ]; then
     mount "$EFI_PART" /mnt/boot
 fi
 
-# Install base packages (limine included)
-echo "Installing base system..."
-pacstrap /mnt base base-devel linux-firmware networkmanager vim sudo git limine
+# Install base system + compatibility/performance packages
+echo "Installing base system and additional packages..."
+pacstrap /mnt \
+    base base-devel \
+    linux-firmware            # firmware for most hardware
+    amd-ucode intel-ucode     # CPU microcode
+    mesa vulkan-radeon vulkan-intel vulkan-icd-loader  # GPU drivers & Vulkan
+    xf86-video-amdgpu xf86-video-intel xf86-video-nouveau # open-source GPU drivers
+    pipewire pipewire-alsa pipewire-pulse wireplumber    # audio
+    alsa-firmware sof-firmware                           # audio firmware
+    ntfs-3g exfatprogs dosfstools                         # filesystem tools
+    bluez bluez-utils                                     # bluetooth
+    networkmanager vim sudo git                           # basic tools
+    tuned irqbalance earlyoom                             # performance tweaks
+    open-vm-tools qemu-guest-agent                        # VM guest agents
+    limine                                                # bootloader
 
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
@@ -114,7 +127,15 @@ echo "$USERNAME:$PASSWORD" | chpasswd
 # Sudo
 echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
 
-# Install liquorix kernel (the script adds repo and installs the kernel)
+# Enable performance services
+systemctl enable tuned irqbalance earlyoom
+# Enable guest agents (they start automatically if running in respective VM)
+systemctl enable vmtoolsd qemu-guest-agent
+
+# Bluetooth (disabled by default; user can start if needed)
+systemctl enable bluetooth
+
+# Install liquorix kernel (script adds repo and installs kernel + headers)
 curl -s 'https://liquorix.net/install-liquorix.sh' | bash
 
 # --- Limine bootloader setup ---
@@ -133,13 +154,13 @@ fi
 cat > /boot/limine.conf <<LIMINE
 timeout: 5
 
-# Entry for Arch Linux with Liquorix kernel
+# Entry for Arch Linux with Liquorix kernel (microcode loaded first)
 :Arch Linux
     comment=Boot with liquorix kernel
     protocol=linux
     kernel_path = boot:///vmlinuz-linux-liquorix
     kernel_cmdline = root=UUID=$ROOT_UUID rw
-    initrd_path = boot:///initramfs-linux-liquorix.img
+    initrd_path = boot:///amd-ucode.img boot:///intel-ucode.img boot:///initramfs-linux-liquorix.img
 LIMINE
 
 EOF
@@ -147,4 +168,4 @@ EOF
 # Unmount and finish
 echo "Installation complete. Unmounting..."
 umount -R /mnt
-echo "You can now reboot."
+echo "You can now reboot. After reboot, log in and change passwords immediately."
