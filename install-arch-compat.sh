@@ -180,11 +180,13 @@ timeout: 5
     kernel_cmdline: root=UUID=$ROOT_UUID rw $UCODE_INITRD initrd=/initramfs-linux-lqx.img quiet
 EOF
 
-    # --- FIX: Setup EFI Fallback Path ---
-    # This ensures the system boots even if NVRAM entry is ignored
-    echo "Setting up EFI fallback path..."
+    # Setup EFI directory structure and Fallback path
+    echo "Setting up EFI paths..."
     mkdir -p /mnt/boot/EFI/BOOT
-    cp /mnt/boot/limine-uefix64.efi /mnt/boot/EFI/BOOT/BOOTX64.EFI
+    # Limine install puts the file in the root usually, we copy it to the standard EFI location for NVRAM
+    if [[ -f /mnt/boot/limine-uefix64.efi ]]; then
+        cp /mnt/boot/limine-uefix64.efi /mnt/boot/EFI/BOOT/BOOTX64.EFI
+    fi
 
     # Register in NVRAM
     echo "Registering Limine in UEFI..."
@@ -202,7 +204,8 @@ EOF
         efibootmgr -b "$BOOT_ENTRY_NUM" -B
     fi
 
-    efibootmgr --create --disk "$EFI_DISK" --part "$PART_NUM" --loader /limine-uefix64.efi --label "Limine"
+    # FIX: Point to the actual location of the file inside /EFI/BOOT/
+    efibootmgr --create --disk "$EFI_DISK" --part "$PART_NUM" --loader '\EFI\BOOT\BOOTX64.EFI' --label "Limine"
 
     echo "Installation complete. Rebooting should now load Limine correctly."
 }
