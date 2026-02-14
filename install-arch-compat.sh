@@ -188,39 +188,39 @@ pacstrap /mnt base base-devel linux-firmware
 print_status "Generating fstab..."
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# Chroot and configure system
-print_status "Configuring system..."
-arch-chroot /mnt /bin/bash <<EOF
+# Create a script to run inside chroot
+cat > /mnt/chroot_script.sh <<'EOF'
+#!/bin/bash
 
 # Set timezone
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 hwclock --systohc
 
 # Configure locale
-echo "$LOCALE1 UTF-8" >> /etc/locale.gen
-if [ -n "$LOCALE2" ]; then
-    echo "$LOCALE2 UTF-8" >> /etc/locale.gen
+echo "$1 UTF-8" >> /etc/locale.gen
+if [ -n "$2" ]; then
+    echo "$2 UTF-8" >> /etc/locale.gen
 fi
 locale-gen
 
-echo "LANG=$LOCALE1" > /etc/locale.conf
+echo "LANG=$1" > /etc/locale.conf
 
 # Set hostname
-echo "$HOSTNAME" > /etc/hostname
+echo "$3" > /etc/hostname
 
 # Set hosts file
 cat > /etc/hosts <<HOSTS
 127.0.0.1   localhost
 ::1         localhost
-127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
+127.0.1.1   $3.localdomain $3
 HOSTS
 
 # Set root password
-echo "root:$ROOT_PASSWORD" | chpasswd
+echo "root:$4" | chpasswd
 
 # Create user
-useradd -m -G wheel,audio,video,storage,optical -s /bin/bash $USERNAME
-echo "$USERNAME:$PASSWORD" | chpasswd
+useradd -m -G wheel,audio,video,storage,optical -s /bin/bash $5
+echo "$5:$6" | chpasswd
 
 # Configure sudo
 echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers
@@ -232,7 +232,6 @@ grub-mkconfig -o /boot/grub/grub.cfg
 
 # Install essential packages for compatibility and performance
 pacman -S --noconfirm \
-    # System utilities
     htop \
     neofetch \
     man-db \
@@ -249,8 +248,6 @@ pacman -S --noconfirm \
     p7zip \
     ntfs-3g \
     dosfstools \
-    
-    # Hardware compatibility
     xf86-video-intel \
     xf86-video-amdgpu \
     xf86-video-nouveau \
@@ -263,46 +260,49 @@ pacman -S --noconfirm \
     libva-mesa-driver \
     intel-media-driver \
     nvidia-utils \
-    
-    # Audio
     pipewire \
     pipewire-alsa \
     pipewire-pulse \
     pipewire-jack \
     wireplumber \
-    
-    # Printing support
     cups \
     cups-pdf \
-    
-    # Bluetooth
     bluez \
     bluez-utils \
-    
-    # Performance tools
     earlyoom \
     irqbalance \
     tuned \
     cpupower \
-    
-    # File systems support
     btrfs-progs \
     exfatprogs \
     f2fs-tools \
     xfsprogs \
-    
-    # Development tools (but minimal)
     gcc \
     make \
     pkg-config
-    
-# Enable essential services
-systemctl enable NetworkManager
-systemctl enable cups
-systemctl enable bluetooth
-systemctl enable earlyoom
-systemctl enable irqbalance
-systemctl enable tuned
+
+# Enable essential services (with verification)
+echo "Enabling services..."
+
+# Function to enable service with verification
+enable_service() {
+    local service=$1
+    echo "Enabling $service..."
+    systemctl enable "$service"
+    if [ $? -eq 0 ]; then
+        echo "✓ $service enabled successfully"
+    else
+        echo "✗ Failed to enable $service"
+    fi
+}
+
+# Enable all services
+enable_service NetworkManager
+enable_service cups
+enable_service bluetooth
+enable_service earlyoom
+enable_service irqbalance
+enable_service tuned
 
 # Optimize pacman configuration
 sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf
@@ -310,6 +310,7 @@ sed -i 's/^#Color/Color/' /etc/pacman.conf
 sed -i 's/^#VerbosePkgLists/VerbosePkgLists/' /etc/pacman.conf
 
 # Install Liquorix kernel using the provided curl command
+echo "Installing Liquorix kernel..."
 curl -s 'https://liquorix.net/install-liquorix.sh' | bash
 
 # Update GRUB after kernel installation
@@ -333,7 +334,28 @@ SYSCTL
 # Configure CPU governor for performance
 echo 'GOVERNOR="performance"' > /etc/default/cpupower
 
+# Create a verification file to confirm services were enabled
+touch /root/services_enabled.confirmed
+
+echo "Chroot configuration completed successfully!"
 EOF
+
+# Make the chroot script executable
+chmod +x /mnt/chroot_script.sh
+
+# Chroot and run the configuration script with all parameters
+print_status "Entering chroot and configuring system..."
+arch-chroot /mnt /bin/bash /chroot_script.sh "$LOCALE1" "$LOCALE2" "$HOSTNAME" "$ROOT_PASSWORD" "$USERNAME" "$PASSWORD"
+
+# Check if the verification file was created
+if [ -f "/mnt/root/services_enabled.confirmed" ]; then
+    print_status "Services were enabled successfully in chroot"
+else
+    print_warning "Services might not have been enabled properly. Check manually after boot."
+fi
+
+# Clean up
+rm -f /mnt/chroot_script.sh
 
 # Unmount partitions
 print_status "Unmounting partitions..."
@@ -341,7 +363,25 @@ umount -R /mnt
 
 print_status "Installation complete!"
 print_status "You can now reboot into your new Arch Linux system"
-print_status "After reboot, run: systemctl start tuned && sudo tuned-adm profile latency-performance"
+print_status "After reboot, you can verify services with: systemctl status NetworkManager cups bluetooth earlyoom irqbalance tuned"
 
 print_warning "Don't forget to install DankMaterialShell manually after first boot!"
 print_warning "Reboot command: reboot"
+
+# Final verification instructions
+cat << EOF
+
+${GREEN}=== POST-INSTALLATION VERIFICATION ===${NC}
+After reboot, run these commands to verify services are running:
+
+${YELLOW}systemctl status NetworkManager${NC}
+${YELLOW}systemctl status cups${NC}
+${YELLOW}systemctl status bluetooth${NC}
+${YELLOW}systemctl status earlyoom${NC}
+${YELLOW}systemctl status irqbalance${NC}
+${YELLOW}systemctl status tuned${NC}
+
+If any services are not enabled, you can enable them with:
+${YELLOW}sudo systemctl enable --now service-name${NC}
+
+EOF
