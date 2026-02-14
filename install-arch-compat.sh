@@ -1,258 +1,343 @@
 #!/bin/bash
-# Arch Linux automated installer (interactive) – safe to share on GitHub
-# Run from Arch live environment as root.
 
-set -e
-trap 'echo "Error on line $LINENO. Unmounting..." && umount -R /mnt 2>/dev/null' ERR
+# Arch Linux Automated Installation Script
+# With Limine bootloader and Liquorix kernel
+# For maximum software/hardware compatibility and performance
 
-# --- Fix for piped scripts: redirect input from terminal ---
-# This ensures read commands work even when script is piped
-exec < /dev/tty
+set -e  # Exit on error
 
-# --- Helper functions for interactive prompts ---
-prompt_string() {
-    local var_name="$1"
-    local prompt_text="$2"
-    local default="$3"
-    local value
-    if [ -n "$default" ]; then
-        read -rp "$prompt_text [$default]: " value
-        value="${value:-$default}"
-    else
-        read -rp "$prompt_text: " value
-    fi
-    eval "$var_name=\"$value\""
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_status() {
+    echo -e "${GREEN}[*]${NC} $1"
 }
 
-prompt_password() {
-    local var_name="$1"
-    local prompt_text="$2"
-    local password password_confirm
-    while true; do
-        read -rsp "$prompt_text: " password
-        echo
-        read -rsp "Confirm password: " password_confirm
-        echo
-        if [ "$password" = "$password_confirm" ]; then
-            break
-        else
-            echo "Passwords do not match. Try again."
-        fi
-    done
-    eval "$var_name=\"$password\""
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# --- Root check ---
-if [ "$EUID" -ne 0 ]; then
-    echo "Please run as root."
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then 
+    print_error "Please run as root"
     exit 1
 fi
 
-# --- Internet check ---
-echo "Checking internet connection..."
-ping -c 1 archlinux.org >/dev/null 2>&1 || { echo "No internet connection."; exit 1; }
-
-# --- Interactive configuration ---
+# Welcome message
 clear
-echo "============================================="
-echo "   Arch Linux Automated Installer"
-echo "============================================="
-echo
-echo "Please provide the following configuration details."
-echo
+print_status "Arch Linux Automated Installation Script"
+print_status "This script will install Arch Linux with Limine bootloader and Liquorix kernel"
+echo ""
 
-# List available disks
-echo "Available disks:"
+# Get user input for configuration
+read -p "Enter hostname: " HOSTNAME
+read -p "Enter username: " USERNAME
+read -sp "Enter password for $USERNAME: " USER_PASSWORD
+echo ""
+read -sp "Enter root password: " ROOT_PASSWORD
+echo ""
+read -p "Enter timezone (e.g., America/New_York): " TIMEZONE
+read -p "Enter keyboard layout (e.g., us): " KEYMAP
+read -p "Enter additional locale (e.g., en_US.UTF-8, leave blank for none): " ADDITIONAL_LOCALE
+
+# Disk selection
+print_status "Available disks:"
 lsblk -d -o NAME,SIZE,MODEL | grep -v "loop"
-echo
+echo ""
+read -p "Enter disk to install to (e.g., /dev/sda): " DISK
 
-# Prompt for disk
-while true; do
-    prompt_string DISK "Enter the target disk (e.g., /dev/sda)" ""
-    if [ -b "$DISK" ]; then
-        break
-    else
-        echo "Disk $DISK does not exist. Please enter a valid disk."
-    fi
-done
-
-prompt_string HOSTNAME "Enter hostname" "archbox"
-prompt_string USERNAME "Enter username for regular user" "user"
-prompt_password PASSWORD "Enter password for user and root (temporary)"
-
-prompt_string TIMEZONE "Enter timezone (e.g., America/New_York)" "America/New_York"
-prompt_string LOCALE "Enter locale (e.g., en_US.UTF-8)" "en_US.UTF-8"
-
-echo
-echo "Installation will be performed with the following settings:"
-echo "  Disk:       $DISK"
-echo "  Hostname:   $HOSTNAME"
-echo "  Username:   $USERNAME"
-echo "  Timezone:   $TIMEZONE"
-echo "  Locale:     $LOCALE"
-echo "  (Password hidden)"
-echo
-read -rp "Press Enter to continue or Ctrl+C to abort."
-
-# --- Detect UEFI or BIOS ---
-if [ -d /sys/firmware/efi ]; then
-    EFI_MODE=1
-    echo "UEFI mode detected."
-else
-    EFI_MODE=0
-    echo "BIOS mode detected (Legacy)."
+# Confirm installation
+print_warning "This will DESTROY ALL DATA on $DISK"
+read -p "Are you sure you want to continue? (y/N): " CONFIRM
+if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+    print_status "Installation cancelled"
+    exit 0
 fi
 
-# --- Confirm disk partitioning ---
-echo
-echo "WARNING: This will DESTROY ALL DATA on $DISK"
-read -rp "Type 'YES' to continue: " confirm
-if [ "$confirm" != "YES" ]; then
-    echo "Installation cancelled."
-    exit 1
-fi
-
-# --- Partition disk (GPT) ---
-echo "Partitioning $DISK..."
+# Partition the disk
+print_status "Partitioning $DISK..."
 parted -s "$DISK" mklabel gpt
-if [ $EFI_MODE -eq 1 ]; then
-    # UEFI: 512 MiB EFI partition, rest for root
-    parted -s "$DISK" mkpart primary fat32 1MiB 512MiB
-    parted -s "$DISK" set 1 esp on
-    parted -s "$DISK" mkpart primary ext4 512MiB 100%
-    EFI_PART="${DISK}1"
-    ROOT_PART="${DISK}2"
-else
-    # BIOS: single root partition
-    parted -s "$DISK" mkpart primary ext4 1MiB 100%
-    parted -s "$DISK" set 1 boot on
-    ROOT_PART="${DISK}1"
-fi
+parted -s "$DISK" mkpart primary fat32 1MiB 512MiB
+parted -s "$DISK" set 1 esp on
+parted -s "$DISK" mkpart primary ext4 512MiB 100%
 
-# Wait for partition table to update
-sleep 2
-partprobe "$DISK" 2>/dev/null || true
-sleep 1
+# Format partitions
+print_status "Formatting partitions..."
+mkfs.fat -F32 "${DISK}1"
+mkfs.ext4 -F "${DISK}2"
 
-# --- Format partitions ---
-echo "Formatting partitions..."
-if [ $EFI_MODE -eq 1 ]; then
-    mkfs.fat -F32 "$EFI_PART"
-fi
-mkfs.ext4 -F "$ROOT_PART"
+# Mount partitions
+print_status "Mounting partitions..."
+mount "${DISK}2" /mnt
+mkdir -p /mnt/boot
+mount "${DISK}1" /mnt/boot
 
-# --- Mount partitions ---
-echo "Mounting partitions..."
-mount "$ROOT_PART" /mnt
-if [ $EFI_MODE -eq 1 ]; then
-    mkdir -p /mnt/boot
-    mount "$EFI_PART" /mnt/boot
-fi
+# Install base system
+print_status "Installing base system..."
+pacstrap /mnt base base-devel linux-firmware nano sudo networkmanager
 
-# --- Install base system ---
-echo "Installing base system and additional packages..."
-pacstrap /mnt \
-    base base-devel \
-    linux-firmware \
-    amd-ucode intel-ucode \
-    mesa vulkan-radeon vulkan-intel vulkan-icd-loader \
-    xf86-video-amdgpu xf86-video-intel xf86-video-nouveau \
-    pipewire pipewire-alsa pipewire-pulse wireplumber \
-    alsa-firmware sof-firmware \
-    ntfs-3g exfatprogs dosfstools \
-    bluez bluez-utils \
-    networkmanager vim sudo git \
-    tuned irqbalance earlyoom \
-    open-vm-tools qemu-guest-agent \
-    limine
-
-# --- Generate fstab ---
-echo "Generating fstab..."
+# Generate fstab
+print_status "Generating fstab..."
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# --- Get root partition UUID ---
-ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
+# Chroot and configure system
+print_status "Configuring system..."
 
-# --- Chroot and configure ---
-echo "Configuring system in chroot..."
-arch-chroot /mnt /bin/bash <<'CHROOT_EOF'
-set -e
-
-# Timezone
-ln -sf /usr/share/zoneinfo/'"$TIMEZONE"' /etc/localtime
+cat << EOF | arch-chroot /mnt
+# Set timezone
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 hwclock --systohc
 
-# Locale
-sed -i 's/^#'"$LOCALE"'/'"$LOCALE"'/' /etc/locale.gen
+# Set locale (only essential locales)
+echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
+if [ -n "$ADDITIONAL_LOCALE" ] && [ "$ADDITIONAL_LOCALE" != "en_US.UTF-8" ]; then
+    echo "$ADDITIONAL_LOCALE UTF-8" >> /etc/locale.gen
+fi
 locale-gen
-echo "LANG='"$LOCALE"'" > /etc/locale.conf
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
-# Hostname
-echo "'"$HOSTNAME"'" > /etc/hostname
-cat > /etc/hosts <<HOSTS_EOF
+# Set keyboard layout
+echo "KEYMAP=$KEYMAP" > /etc/vconsole.conf
+
+# Set hostname
+echo "$HOSTNAME" > /etc/hostname
+
+# Set hosts file
+cat > /etc/hosts << HOSTS
 127.0.0.1   localhost
 ::1         localhost
-127.0.1.1   '"$HOSTNAME"'.localdomain '"$HOSTNAME"'
-HOSTS_EOF
+127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
+HOSTS
 
-# Enable network manager
+# Set root password
+echo "root:$ROOT_PASSWORD" | chpasswd
+
+# Create user
+useradd -m -G wheel -s /bin/bash $USERNAME
+echo "$USERNAME:$USER_PASSWORD" | chpasswd
+
+# Configure sudo
+echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers
+
+# Enable NetworkManager
 systemctl enable NetworkManager
 
-# Set passwords
-echo "root:'"$PASSWORD"'" | chpasswd
-useradd -m -G wheel '"$USERNAME"'
-echo "'"$USERNAME"':'"$PASSWORD"'" | chpasswd
+# Install Limine bootloader
+print_status "Installing Limine bootloader..."
+pacman -S --noconfirm limine
 
-# Sudo
-echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+# Install Limine to disk
+limine bios-install $DISK
 
-# Enable services
-systemctl enable tuned irqbalance earlyoom
-systemctl enable vmtoolsd qemu-guest-agent
-systemctl enable bluetooth
-
-# Install liquorix kernel
-echo "Installing Liquorix kernel..."
-curl -s 'https://liquorix.net/install-liquorix.sh' | bash
-
-# --- Limine bootloader setup ---
-if [ '"$EFI_MODE"' -eq 1 ]; then
-    # UEFI
-    mkdir -p /boot/EFI/BOOT
-    cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI
-    cp /usr/share/limine/limine.sys /boot/
-else
-    # BIOS
-    limine bios-install '"$DISK"'
-    cp /usr/share/limine/limine.sys /boot/
-fi
-
-# Create limine configuration
-cat > /boot/limine.conf <<LIMINE_EOF
+# Configure Limine
+mkdir -p /boot/limine
+cat > /boot/limine/limine.conf << LIMINE
 timeout: 5
 
-:Arch Linux
-    comment=Boot with liquorix kernel
-    protocol=linux
-    kernel_path = boot:///vmlinuz-linux-liquorix
-    kernel_cmdline = root=UUID='"$ROOT_UUID"' rw
-    initrd_path = boot:///amd-ucode.img boot:///intel-ucode.img boot:///initramfs-linux-liquorix.img
-LIMINE_EOF
+/Directory: /boot
 
-CHROOT_EOF
+/Arch Linux
+    protocol: linux
+    kernel_path: boot:/vmlinuz-linux-liquorix
+    kernel_cmdline: root=UUID=$(blkid -s UUID -o value ${DISK}2) rw
+    module_path: boot:/initramfs-linux-liquorix.img
+LIMINE
 
-# --- Unmount and finish ---
-echo "Installation complete. Unmounting..."
+# Install Liquorix kernel
+print_status "Installing Liquorix kernel..."
+curl -s 'https://liquorix.net/install-liquorix.sh' | bash
+
+# Install essential packages for maximum compatibility
+print_status "Installing essential packages..."
+pacman -S --noconfirm \
+    # Core utilities
+    htop \
+    neofetch \
+    git \
+    wget \
+    curl \
+    unzip \
+    zip \
+    p7zip \
+    tar \
+    gzip \
+    bzip2 \
+    xz \
+    zstd \
+    \
+    # Development tools
+    gcc \
+    make \
+    cmake \
+    autoconf \
+    automake \
+    pkg-config \
+    \
+    # Hardware compatibility
+    mesa \
+    vulkan-intel \
+    vulkan-radeon \
+    vulkan-amdgpu \
+    nvidia-dkms \
+    nvidia-utils \
+    nvidia-settings \
+    libva \
+    libva-intel-driver \
+    libva-mesa-driver \
+    intel-media-driver \
+    \
+    # Audio
+    pipewire \
+    pipewire-alsa \
+    pipewire-pulse \
+    pipewire-jack \
+    wireplumber \
+    alsa-utils \
+    \
+    # Bluetooth
+    bluez \
+    bluez-utils \
+    \
+    # Printing
+    cups \
+    hplip \
+    \
+    # Network
+    networkmanager-openvpn \
+    networkmanager-pptp \
+    networkmanager-vpnc \
+    iwd \
+    \
+    # File systems
+    ntfs-3g \
+    exfat-utils \
+    dosfstools \
+    btrfs-progs \
+    xfsprogs \
+    f2fs-tools \
+    \
+    # Codecs and multimedia
+    ffmpeg \
+    gst-plugins-base \
+    gst-plugins-good \
+    gst-plugins-bad \
+    gst-plugins-ugly \
+    gst-libav \
+    \
+    # Fonts
+    noto-fonts \
+    noto-fonts-cjk \
+    noto-fonts-emoji \
+    ttf-dejavu \
+    ttf-liberation \
+    ttf-droid \
+    \
+    # Performance tools
+    irqbalance \
+    cpupower \
+    tuned \
+    earlyoom \
+    preload \
+    \
+    # System utilities
+    polkit \
+    udisks2 \
+    upower \
+    acpi \
+    acpid \
+    tlp \
+    powertop \
+    thermald \
+    \
+    # Security
+    firewalld \
+    openssh \
+    \
+    # X11 and Wayland (minimal)
+    xorg-xrandr \
+    xorg-xrdb \
+    xorg-xsetroot \
+    xorg-xset \
+    xdg-user-dirs \
+    xdg-utils \
+    \
+    # Firmware
+    sof-firmware \
+    alsa-firmware \
+    alsa-ucm-conf
+
+# Enable services
+systemctl enable NetworkManager
+systemctl enable bluetooth
+systemctl enable cups
+systemctl enable firewalld
+systemctl enable earlyoom
+systemctl enable preload
+systemctl enable irqbalance
+systemctl enable tuned
+systemctl enable tlp
+systemctl enable thermald
+systemctl enable acpid
+systemctl enable upower
+systemctl enable udisks2
+
+# Performance tweaks
+print_status "Applying performance tweaks..."
+
+# Enable TRIM for SSD (if applicable)
+systemctl enable fstrim.timer
+
+# Configure sysctl for performance
+cat >> /etc/sysctl.d/99-performance.conf << SYSCTL
+# Increase system file limits
+fs.file-max = 2097152
+
+# Increase network performance
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+net.core.rmem_default = 16777216
+net.core.wmem_default = 16777216
+net.core.optmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 87380 134217728
+net.ipv4.tcp_wmem = 4096 65536 134217728
+
+# Enable TCP Fast Open
+net.ipv4.tcp_fastopen = 3
+
+# Reduce swap usage
+vm.swappiness = 10
+vm.vfs_cache_pressure = 50
+
+# Improve disk I/O performance
+vm.dirty_ratio = 30
+vm.dirty_background_ratio = 5
+SYSCTL
+
+# Configure CPU governor for performance
+cat > /etc/tmpfiles.d/cpupower.conf << CPU
+w /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor - - - - performance
+CPU
+
+# Create user directories
+xdg-user-dirs-update
+
+print_status "Installation complete!"
+print_status "System configured with Limine bootloader and Liquorix kernel"
+print_status "You can now reboot into your new Arch Linux system"
+print_status "After reboot, you can install DankMaterialShell or any other custom shell"
+EOF
+
+# Unmount partitions
+print_status "Unmounting partitions..."
 umount -R /mnt
 
-echo
-echo "============================================="
-echo "   Installation Complete!"
-echo "============================================="
-echo "You can now reboot with: reboot"
-echo
-echo "After reboot:"
-echo "  - Log in as $USERNAME (password you set)"
-echo "  - Change your password with: passwd"
-echo "  - Change root password with: sudo passwd"
-echo "============================================="
+print_status "Installation completed successfully!"
+print_warning "Please remove the installation media and reboot"
