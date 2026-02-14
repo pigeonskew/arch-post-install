@@ -1,343 +1,211 @@
 #!/bin/bash
 
-# Arch Linux Automated Installation Script
-# With Limine bootloader and Liquorix kernel
-# For maximum software/hardware compatibility and performance
+# Ensure the script is run as root
+if [[ $EUID -ne 0 ]]; then
+   echo "This script must be run as root." 
+   exit 1
+fi
 
-set -e  # Exit on error
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-# Function to print colored output
-print_status() {
-    echo -e "${GREEN}[*]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then 
-    print_error "Please run as root"
+# Verify UEFI mode
+if [[ ! -d /sys/firmware/efi ]]; then
+    echo "This script requires a UEFI system."
     exit 1
 fi
 
-# Welcome message
-clear
-print_status "Arch Linux Automated Installation Script"
-print_status "This script will install Arch Linux with Limine bootloader and Liquorix kernel"
-echo ""
+# --- Helper Functions ---
+verify_arch() {
+    if [[ ! -f /etc/arch-release ]]; then
+        echo "You must run this script from an Arch Linux live environment."
+        exit 1
+    fi
+}
 
-# Get user input for configuration
-read -p "Enter hostname: " HOSTNAME
-read -p "Enter username: " USERNAME
-read -sp "Enter password for $USERNAME: " USER_PASSWORD
-echo ""
-read -sp "Enter root password: " ROOT_PASSWORD
-echo ""
-read -p "Enter timezone (e.g., America/New_York): " TIMEZONE
-read -p "Enter keyboard layout (e.g., us): " KEYMAP
-read -p "Enter additional locale (e.g., en_US.UTF-8, leave blank for none): " ADDITIONAL_LOCALE
+set_keyboard() {
+    echo "Available keymaps:"
+    localectl list-keymaps | less
+    read -rp "Enter keyboard layout (e.g., us, de): " KEYMAP
+    loadkeys "$KEYMAP"
+}
 
-# Disk selection
-print_status "Available disks:"
-lsblk -d -o NAME,SIZE,MODEL | grep -v "loop"
-echo ""
-read -p "Enter disk to install to (e.g., /dev/sda): " DISK
+connect_wifi() {
+    read -rp "Do you want to connect to Wi-Fi? (y/n): " WIFI_CHOICE
+    if [[ "$WIFI_CHOICE" == "y" ]]; then
+        iwctl
+    fi
+    # Check connection
+    if ! ping -c 1 archlinux.org &> /dev/null; then
+        echo "No internet connection. Exiting."
+        exit 1
+    fi
+}
 
-# Confirm installation
-print_warning "This will DESTROY ALL DATA on $DISK"
-read -p "Are you sure you want to continue? (y/N): " CONFIRM
-if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-    print_status "Installation cancelled"
-    exit 0
-fi
+# --- Installation Logic ---
+main() {
+    verify_arch
+    set_keyboard
+    connect_wifi
 
-# Partition the disk
-print_status "Partitioning $DISK..."
-parted -s "$DISK" mklabel gpt
-parted -s "$DISK" mkpart primary fat32 1MiB 512MiB
-parted -s "$DISK" set 1 esp on
-parted -s "$DISK" mkpart primary ext4 512MiB 100%
+    # Disk Setup
+    lsblk
+    read -rp "Enter the disk to install to (e.g., /dev/nvme0n1 or /dev/sda): " DISK
+    
+    # Validation to prevent accidental system destruction
+    if [[ ! -b "$DISK" ]]; then
+        echo "Disk $DISK not found."
+        exit 1
+    fi
 
-# Format partitions
-print_status "Formatting partitions..."
-mkfs.fat -F32 "${DISK}1"
-mkfs.ext4 -F "${DISK}2"
+    echo "WARNING: All data on $DISK will be wiped!"
+    read -rp "Type 'YES' to confirm partitioning: " CONFIRM
+    if [[ "$CONFIRM" != "YES" ]]; then
+        exit 1
+    fi
 
-# Mount partitions
-print_status "Mounting partitions..."
-mount "${DISK}2" /mnt
-mkdir -p /mnt/boot
-mount "${DISK}1" /mnt/boot
+    # Partitioning (UEFI)
+    # 1: 512M EFI System Partition
+    # 2: Remainder Linux Filesystem (Root)
+    echo "Partitioning disk..."
+    parted "$DISK" --script mklabel gpt \
+        mkpart ESP fat32 1MiB 513MiB \
+        set 1 esp on \
+        mkpart root ext4 513MiB 100%
 
-# Install base system
-print_status "Installing base system..."
-pacstrap /mnt base base-devel linux-firmware nano sudo networkmanager
+    # Formatting
+    echo "Formatting partitions..."
+    mkfs.fat -F32 "${DISK}p1" 2>/dev/null || mkfs.fat -F32 "${DISK}1"
+    
+    # We use BTRFS for performance features (compression), or ext4 for simplicity.
+    # Request asked for performance tweaks. BTRFS with zstd is a good standard.
+    read -rp "Use BTRFS for root? (Recommended for performance/snapshots) (y/n): " FS_CHOICE
+    if [[ "$FS_CHOICE" == "y" ]]; then
+        FS_TYPE="btrfs"
+        mkfs.btrfs -f "${DISK}p2" 2>/dev/null || mkfs.btrfs -f "${DISK}2"
+    else
+        FS_TYPE="ext4"
+        mkfs.ext4 -F "${DISK}p2" 2>/dev/null || mkfs.ext4 -F "${DISK}2"
+    fi
 
-# Generate fstab
-print_status "Generating fstab..."
-genfstab -U /mnt >> /mnt/etc/fstab
+    # Mounting
+    mount "${DISK}p2" /mnt 2>/dev/null || mount "${DISK}2" /mnt
+    mkdir -p /mnt/boot
+    mount "${DISK}p1" /mnt/boot 2>/dev/null || mount "${DISK}1" /mnt/boot
 
-# Chroot and configure system
-print_status "Configuring system..."
+    # Base Installation
+    echo "Installing base system..."
+    pacstrap /mnt base base-devel linux-firmware git vim networkmanager intel-ucode amd-ucode
 
-cat << EOF | arch-chroot /mnt
-# Set timezone
-ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
-hwclock --systohc
+    # Generate Fstab
+    genfstab -U /mnt >> /mnt/etc/fstab
 
-# Set locale (only essential locales)
-echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
-if [ -n "$ADDITIONAL_LOCALE" ] && [ "$ADDITIONAL_LOCALE" != "en_US.UTF-8" ]; then
-    echo "$ADDITIONAL_LOCALE UTF-8" >> /etc/locale.gen
-fi
-locale-gen
-echo "LANG=en_US.UTF-8" > /etc/locale.conf
+    # Timezone & Clock
+    read -rp "Enter Timezone (e.g., America/New_York): " TIMEZONE
+    arch-chroot /mnt ln -sf /usr/share/zoneinfo/"$TIMEZONE" /etc/localtime
+    arch-chroot /mnt hwclock --systohc
 
-# Set keyboard layout
-echo "KEYMAP=$KEYMAP" > /etc/vconsole.conf
+    # Locales (Max 2)
+    echo "Configuring locales..."
+    echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
+    read -rp "Enter a second locale (e.g., de_DE.UTF-8) or press Enter to skip: " LOC2
+    if [[ -n "$LOC2" ]]; then
+        echo "$LOC2 UTF-8" >> /mnt/etc/locale.gen
+    fi
+    arch-chroot /mnt locale-gen
+    echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
+    echo "KEYMAP=$KEYMAP" > /mnt/etc/vconsole.conf
 
-# Set hostname
-echo "$HOSTNAME" > /etc/hostname
+    # Hostname & Hosts
+    read -rp "Enter hostname: " HOSTNAME
+    echo "$HOSTNAME" > /mnt/etc/hostname
+    echo "127.0.0.1   localhost" > /mnt/etc/hosts
+    echo "::1         localhost" >> /mnt/etc/hosts
+    echo "127.0.1.1   $HOSTNAME.localdomain $HOSTNAME" >> /mnt/etc/hosts
 
-# Set hosts file
-cat > /etc/hosts << HOSTS
-127.0.0.1   localhost
-::1         localhost
-127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
-HOSTS
+    # User Setup
+    read -rp "Enter root password: " ROOTPASS
+    arch-chroot /mnt echo "root:$ROOTPASS" | chpasswd
 
-# Set root password
-echo "root:$ROOT_PASSWORD" | chpasswd
+    read -rp "Enter username: " USERNAME
+    arch-chroot /mnt useradd -m -G wheel,storage,optical -s /bin/bash "$USERNAME"
+    read -rp "Enter user password: " USERPASS
+    arch-chroot /mnt echo "$USERNAME:$USERPASS" | chpasswd
+    
+    # Sudoers setup
+    echo "%wheel ALL=(ALL:ALL) ALL" > /mnt/etc/sudoers.d/wheel
 
-# Create user
-useradd -m -G wheel -s /bin/bash $USERNAME
-echo "$USERNAME:$USER_PASSWORD" | chpasswd
+    # --- Performance & Compatibility Setup ---
+    
+    echo "Installing Liquorix Kernel..."
+    # Install dependencies first
+    arch-chroot /mnt pacman -S --noconfirm curl
+    # Run the Liquorix install script as requested
+    arch-chroot /mnt bash -c "curl -s 'https://liquorix.net/install-liquorix.sh' | bash"
 
-# Configure sudo
-echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers
+    echo "Installing essential packages for hardware compatibility..."
+    # Essential Firmware
+    arch-chroot /mnt pacman -S --noconfirm --needed \
+        linux-firmware \
+        sof-firmware \
+        bluez \
+        bluez-utils \
+        cups \
+        avahi \
+        xdg-utils \
+        gvfs \
+        gvfs-mtp \
+        udisks2 \
+        ntfs-3g \
+        exfatprogs \
+        bash-completion
 
-# Enable NetworkManager
-systemctl enable NetworkManager
-
-# Install Limine bootloader
-print_status "Installing Limine bootloader..."
-pacman -S --noconfirm limine
-
-# Install Limine to disk
-limine bios-install $DISK
-
-# Configure Limine
-mkdir -p /boot/limine
-cat > /boot/limine/limine.conf << LIMINE
-timeout: 5
-
-/Directory: /boot
-
-/Arch Linux
-    protocol: linux
-    kernel_path: boot:/vmlinuz-linux-liquorix
-    kernel_cmdline: root=UUID=$(blkid -s UUID -o value ${DISK}2) rw
-    module_path: boot:/initramfs-linux-liquorix.img
-LIMINE
-
-# Install Liquorix kernel
-print_status "Installing Liquorix kernel..."
-curl -s 'https://liquorix.net/install-liquorix.sh' | bash
-
-# Install essential packages for maximum compatibility
-print_status "Installing essential packages..."
-pacman -S --noconfirm \
-    # Core utilities
-    htop \
-    neofetch \
-    git \
-    wget \
-    curl \
-    unzip \
-    zip \
-    p7zip \
-    tar \
-    gzip \
-    bzip2 \
-    xz \
-    zstd \
-    \
-    # Development tools
-    gcc \
-    make \
-    cmake \
-    autoconf \
-    automake \
-    pkg-config \
-    \
-    # Hardware compatibility
-    mesa \
-    vulkan-intel \
-    vulkan-radeon \
-    vulkan-amdgpu \
-    nvidia-dkms \
-    nvidia-utils \
-    nvidia-settings \
-    libva \
-    libva-intel-driver \
-    libva-mesa-driver \
-    intel-media-driver \
-    \
-    # Audio
-    pipewire \
-    pipewire-alsa \
-    pipewire-pulse \
-    pipewire-jack \
-    wireplumber \
-    alsa-utils \
-    \
-    # Bluetooth
-    bluez \
-    bluez-utils \
-    \
-    # Printing
-    cups \
-    hplip \
-    \
-    # Network
-    networkmanager-openvpn \
-    networkmanager-pptp \
-    networkmanager-vpnc \
-    iwd \
-    \
-    # File systems
-    ntfs-3g \
-    exfat-utils \
-    dosfstools \
-    btrfs-progs \
-    xfsprogs \
-    f2fs-tools \
-    \
-    # Codecs and multimedia
-    ffmpeg \
-    gst-plugins-base \
-    gst-plugins-good \
-    gst-plugins-bad \
-    gst-plugins-ugly \
-    gst-libav \
-    \
-    # Fonts
-    noto-fonts \
-    noto-fonts-cjk \
-    noto-fonts-emoji \
-    ttf-dejavu \
-    ttf-liberation \
-    ttf-droid \
-    \
-    # Performance tools
-    irqbalance \
-    cpupower \
-    tuned \
-    earlyoom \
-    preload \
-    \
-    # System utilities
-    polkit \
-    udisks2 \
-    upower \
-    acpi \
-    acpid \
-    tlp \
-    powertop \
-    thermald \
-    \
-    # Security
-    firewalld \
-    openssh \
-    \
-    # X11 and Wayland (minimal)
-    xorg-xrandr \
-    xorg-xrdb \
-    xorg-xsetroot \
-    xorg-xset \
-    xdg-user-dirs \
-    xdg-utils \
-    \
-    # Firmware
-    sof-firmware \
-    alsa-firmware \
-    alsa-ucm-conf
-
-# Enable services
-systemctl enable NetworkManager
-systemctl enable bluetooth
-systemctl enable cups
-systemctl enable firewalld
-systemctl enable earlyoom
-systemctl enable preload
-systemctl enable irqbalance
-systemctl enable tuned
-systemctl enable tlp
-systemctl enable thermald
-systemctl enable acpid
-systemctl enable upower
-systemctl enable udisks2
-
-# Performance tweaks
-print_status "Applying performance tweaks..."
-
-# Enable TRIM for SSD (if applicable)
-systemctl enable fstrim.timer
-
-# Configure sysctl for performance
-cat >> /etc/sysctl.d/99-performance.conf << SYSCTL
-# Increase system file limits
-fs.file-max = 2097152
-
-# Increase network performance
-net.core.rmem_max = 134217728
-net.core.wmem_max = 134217728
-net.core.rmem_default = 16777216
-net.core.wmem_default = 16777216
-net.core.optmem_max = 16777216
-net.ipv4.tcp_rmem = 4096 87380 134217728
-net.ipv4.tcp_wmem = 4096 65536 134217728
-
-# Enable TCP Fast Open
-net.ipv4.tcp_fastopen = 3
-
-# Reduce swap usage
-vm.swappiness = 10
-vm.vfs_cache_pressure = 50
-
-# Improve disk I/O performance
-vm.dirty_ratio = 30
-vm.dirty_background_ratio = 5
-SYSCTL
-
-# Configure CPU governor for performance
-cat > /etc/tmpfiles.d/cpupower.conf << CPU
-w /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor - - - - performance
-CPU
-
-# Create user directories
-xdg-user-dirs-update
-
-print_status "Installation complete!"
-print_status "System configured with Limine bootloader and Liquorix kernel"
-print_status "You can now reboot into your new Arch Linux system"
-print_status "After reboot, you can install DankMaterialShell or any other custom shell"
+    # Performance Tweaks
+    echo "Applying performance tweaks..."
+    # I/O Scheduler (BFQ for SSDs/HDDs responsiveness)
+    cat <<EOF > /mnt/etc/udev/rules.d/60-ioschedulers.rules
+# Set scheduler for NVMe
+ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]", ATTR{queue/scheduler}="none"
+# Set scheduler for SSDs and HDDs
+ACTION=="add|change", KERNEL=="sd[a-z]|mmcblk[0-9]*", ATTR{queue/scheduler}="bfq"
 EOF
 
-# Unmount partitions
-print_status "Unmounting partitions..."
-umount -R /mnt
+    # Enable services
+    arch-chroot /mnt systemctl enable NetworkManager systemd-resolved
+    arch-chroot /mnt systemctl enable bluetooth cups avahi-daemon
 
-print_status "Installation completed successfully!"
-print_warning "Please remove the installation media and reboot"
+    # --- Limine Bootloader Setup ---
+    echo "Installing Limine..."
+    arch-chroot /mnt pacman -S --noconfirm limine
+
+    # Limine installation logic
+    # Note: Limine setup can vary; this installs the binaries to the ESP and creates a basic config.
+    # We assume the ESP is mounted at /boot.
+    
+    # Install Limine to the EFI partition
+    arch-chroot /mnt limine-install "$DISK"
+
+    # Detect Microcode
+    UCODE_INITRD=""
+    if [[ -f /mnt/boot/intel-ucode.img ]]; then
+        UCODE_INITRD="initrd=/intel-ucode.img"
+    elif [[ -mnt/boot/amd-ucode.img ]]; then
+        UCODE_INITRD="initrd=/amd-ucode.img"
+    fi
+
+    # Get Root UUID
+    ROOT_UUID=$(blkid -s UUID -o value "${DISK}p2" 2>/dev/null || blkid -s UUID -o value "${DISK}2")
+
+    # Create Limine Configuration
+    # Limine looks for limine.conf in the root of the ESP or /boot
+    cat <<EOF > /mnt/boot/limine.conf
+timeout: 5
+
+/Arch Linux Liquorix
+    protocol: linux
+    kernel_path: boot():/vmlinuz-linux-lqx
+    kernel_cmdline: root=UUID=$ROOT_UUID rw $UCODE_INITRD initrd=/initramfs-linux-lqx.img quiet
+EOF
+
+    echo "Installation complete."
+    echo "You may now reboot into your new system."
+}
+
+main
