@@ -6,11 +6,11 @@ set -e  # exit on any error
 trap 'echo "Error on line $LINENO. Unmounting..." && umount -R /mnt 2>/dev/null' ERR
 
 # ------------------- CONFIGURATION (edit these) -------------------
-DISK="/dev/sda"               # Target disk (will be completely wiped!)
-HOSTNAME="archbox"            # Desired hostname
-USERNAME="user"               # Regular username
-PASSWORD="password"           # TEMPORARY password (change after first boot)
-TIMEZONE="America/New_York"   # Use "timedatectl list-timezones" to find yours
+DISK="/dev/vda"               # Target disk (will be completely wiped!)
+HOSTNAME="ominoussage"            # Desired hostname
+USERNAME="ominoussage"               # Regular username
+PASSWORD="tsuchiya145609"           # TEMPORARY password (change after first boot)
+TIMEZONE="Asia/Manila"   # Use "timedatectl list-timezones" to find yours
 LOCALE="en_US.UTF-8"          # System locale
 # -------------------------------------------------------------------
 
