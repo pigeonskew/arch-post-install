@@ -21,8 +21,10 @@ verify_arch() {
 }
 
 set_keyboard() {
-    echo "Available keymaps:"
-    localectl list-keymaps | less
+    echo "Available keymaps (showing common ones):"
+    # Display common keymaps without blocking interaction
+    localectl list-keymaps | grep -E "^(us|de|fr|gb|es|it|pt|ru|ua|cn|tw|jp|kr)" 2>/dev/null || localectl list-keymaps | head -n 20
+    echo "..."
     read -rp "Enter keyboard layout (e.g., us, de): " KEYMAP
     loadkeys "$KEYMAP"
 }
@@ -72,23 +74,32 @@ main() {
 
     # Formatting
     echo "Formatting partitions..."
-    mkfs.fat -F32 "${DISK}p1" 2>/dev/null || mkfs.fat -F32 "${DISK}1"
+    # Handle nvme vs sd naming conventions
+    if [[ "$DISK" =~ "nvme" ]]; then
+        BOOT_PART="${DISK}p1"
+        ROOT_PART="${DISK}p2"
+    else
+        BOOT_PART="${DISK}1"
+        ROOT_PART="${DISK}2"
+    fi
+
+    mkfs.fat -F32 "$BOOT_PART"
     
     # We use BTRFS for performance features (compression), or ext4 for simplicity.
     # Request asked for performance tweaks. BTRFS with zstd is a good standard.
     read -rp "Use BTRFS for root? (Recommended for performance/snapshots) (y/n): " FS_CHOICE
     if [[ "$FS_CHOICE" == "y" ]]; then
         FS_TYPE="btrfs"
-        mkfs.btrfs -f "${DISK}p2" 2>/dev/null || mkfs.btrfs -f "${DISK}2"
+        mkfs.btrfs -f "$ROOT_PART"
     else
         FS_TYPE="ext4"
-        mkfs.ext4 -F "${DISK}p2" 2>/dev/null || mkfs.ext4 -F "${DISK}2"
+        mkfs.ext4 -F "$ROOT_PART"
     fi
 
     # Mounting
-    mount "${DISK}p2" /mnt 2>/dev/null || mount "${DISK}2" /mnt
+    mount "$ROOT_PART" /mnt
     mkdir -p /mnt/boot
-    mount "${DISK}p1" /mnt/boot 2>/dev/null || mount "${DISK}1" /mnt/boot
+    mount "$BOOT_PART" /mnt/boot
 
     # Base Installation
     echo "Installing base system..."
@@ -186,12 +197,12 @@ EOF
     UCODE_INITRD=""
     if [[ -f /mnt/boot/intel-ucode.img ]]; then
         UCODE_INITRD="initrd=/intel-ucode.img"
-    elif [[ -mnt/boot/amd-ucode.img ]]; then
+    elif [[ -f /mnt/boot/amd-ucode.img ]]; then
         UCODE_INITRD="initrd=/amd-ucode.img"
     fi
 
     # Get Root UUID
-    ROOT_UUID=$(blkid -s UUID -o value "${DISK}p2" 2>/dev/null || blkid -s UUID -o value "${DISK}2")
+    ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
 
     # Create Limine Configuration
     # Limine looks for limine.conf in the root of the ESP or /boot
