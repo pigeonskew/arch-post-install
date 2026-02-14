@@ -21,11 +21,8 @@ verify_arch() {
 }
 
 set_keyboard() {
-    echo "Available keymaps (showing common ones):"
-    # Display common keymaps without blocking interaction
-    localectl list-keymaps | grep -E "^(us|de|fr|gb|es|it|pt|ru|ua|cn|tw|jp|kr)" 2>/dev/null || localectl list-keymaps | head -n 20
-    echo "..."
-    read -rp "Enter keyboard layout (e.g., us, de): " KEYMAP
+    # Simple prompt without pager to avoid user confusion
+    read -rp "Enter keyboard layout (e.g., us, de, es): " KEYMAP
     loadkeys "$KEYMAP"
 }
 
@@ -51,7 +48,6 @@ main() {
     lsblk
     read -rp "Enter the disk to install to (e.g., /dev/nvme0n1 or /dev/sda): " DISK
     
-    # Validation to prevent accidental system destruction
     if [[ ! -b "$DISK" ]]; then
         echo "Disk $DISK not found."
         exit 1
@@ -64,17 +60,13 @@ main() {
     fi
 
     # Partitioning (UEFI)
-    # 1: 512M EFI System Partition
-    # 2: Remainder Linux Filesystem (Root)
     echo "Partitioning disk..."
     parted "$DISK" --script mklabel gpt \
         mkpart ESP fat32 1MiB 513MiB \
         set 1 esp on \
         mkpart root ext4 513MiB 100%
 
-    # Formatting
-    echo "Formatting partitions..."
-    # Handle nvme vs sd naming conventions
+    # Define partition names based on disk type
     if [[ "$DISK" =~ "nvme" ]]; then
         BOOT_PART="${DISK}p1"
         ROOT_PART="${DISK}p2"
@@ -83,10 +75,10 @@ main() {
         ROOT_PART="${DISK}2"
     fi
 
+    # Formatting
+    echo "Formatting partitions..."
     mkfs.fat -F32 "$BOOT_PART"
     
-    # We use BTRFS for performance features (compression), or ext4 for simplicity.
-    # Request asked for performance tweaks. BTRFS with zstd is a good standard.
     read -rp "Use BTRFS for root? (Recommended for performance/snapshots) (y/n): " FS_CHOICE
     if [[ "$FS_CHOICE" == "y" ]]; then
         FS_TYPE="btrfs"
@@ -103,7 +95,7 @@ main() {
 
     # Base Installation
     echo "Installing base system..."
-    pacstrap /mnt base base-devel linux-firmware git vim networkmanager intel-ucode amd-ucode
+    pacstrap /mnt base base-devel linux-firmware git vim networkmanager intel-ucode amd-ucode efibootmgr
 
     # Generate Fstab
     genfstab -U /mnt >> /mnt/etc/fstab
@@ -186,11 +178,7 @@ EOF
     echo "Installing Limine..."
     arch-chroot /mnt pacman -S --noconfirm limine
 
-    # Limine installation logic
-    # Note: Limine setup can vary; this installs the binaries to the ESP and creates a basic config.
-    # We assume the ESP is mounted at /boot.
-    
-    # Install Limine to the EFI partition
+    # Install Limine to the disk (boot sector/MBR gap for hybrid boot safety)
     arch-chroot /mnt limine-install "$DISK"
 
     # Detect Microcode
@@ -205,7 +193,6 @@ EOF
     ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
 
     # Create Limine Configuration
-    # Limine looks for limine.conf in the root of the ESP or /boot
     cat <<EOF > /mnt/boot/limine.conf
 timeout: 5
 
@@ -214,6 +201,27 @@ timeout: 5
     kernel_path: boot():/vmlinuz-linux-lqx
     kernel_cmdline: root=UUID=$ROOT_UUID rw $UCODE_INITRD initrd=/initramfs-linux-lqx.img quiet
 EOF
+
+    # FIX: Register Limine as a UEFI Boot Entry
+    # This solves the issue of booting straight to UEFI settings
+    echo "Registering Limine in UEFI Boot Manager..."
+    
+    # Remove existing entry if it exists to avoid duplicates
+    BOOT_ENTRY_NUM=$(efibootmgr | grep "Limine" | sed 's/Boot\([0-9]*\)\*.*/\1/')
+    if [[ -n "$BOOT_ENTRY_NUM" ]]; then
+        efibootmgr -b "$BOOT_ENTRY_NUM" -B
+    fi
+    
+    # Determine the EFI disk and partition number for efibootmgr
+    if [[ "$DISK" =~ "nvme" ]]; then
+        EFI_DISK="${DISK%p*}" # Remove partition suffix (e.g. p1) -> nvme0n1
+        PART_NUM="${BOOT_PART##*p}" # Get number after p (e.g. 1)
+    else
+        EFI_DISK="$DISK"
+        PART_NUM="${BOOT_PART##*[a-z]}" # Get number after letter (e.g. sda1 -> 1)
+    fi
+
+    efibootmgr --create --disk "$EFI_DISK" --part "$PART_NUM" --loader /limine-uefix64.efi --label "Limine"
 
     echo "Installation complete."
     echo "You may now reboot into your new system."
