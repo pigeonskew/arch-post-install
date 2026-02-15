@@ -1,14 +1,13 @@
 #!/bin/bash
 
-# Ensure script is run as root
+# ---------------------------------------------------------
+# SAFETY CHECKS
+# ---------------------------------------------------------
 if [[ $EUID -ne 0 ]]; then
    echo "This script must be run as root." 
    exit 1
 fi
 
-# ---------------------------------------------------------
-# HELPER FUNCTIONS
-# ---------------------------------------------------------
 error_exit() {
     echo ":: Error: $1"
     exit 1
@@ -68,9 +67,7 @@ echo "=========================================="
 echo "Target Disk:   $DISK"
 echo "Hostname:      $HOSTNAME"
 echo "Username:      $USERNAME"
-echo "Keyboard:      $KEYMAP"
 echo "Kernel:        Linux (Liquorix)"
-echo "Filesystem:    EXT4"
 echo "Boot Mode:     UEFI"
 echo "=========================================="
 read -p ":: Ready to format disk and install? (y/N): " CONFIRM
@@ -80,21 +77,27 @@ if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
 fi
 
 # ---------------------------------------------------------
-# 2. SYSTEM CLOCK & PARTITIONING
+# 2. PRE-INSTALL SETUP (Mirrors & Clock)
 # ---------------------------------------------------------
-echo ":: Setting up system clock..."
+echo ":: Updating System Clock..."
 timedatectl set-ntp true
 
+echo ":: Ranking Mirrors (this may take a moment)..."
+pacman -Sy --noconfirm reflector
+reflector --latest 20 --sort speed --save /etc/pacman.d/mirrorlist
+
+# ---------------------------------------------------------
+# 3. PARTITIONING
+# ---------------------------------------------------------
 echo ":: Partitioning $DISK..."
-# Wipe disk
-wipefs -a "$DISK"
+wipefs -a "$DISK" &>/dev/null
 sgdisk -Z "$DISK"
 
 # Create partitions: 512MB EFI, Rest Linux
 sgdisk -n 0:0:+512M -t 0:ef00 -c 0:"EFI" "$DISK"
 sgdisk -n 0:0:0 -t 0:8300 -c 0:"Linux" "$DISK"
 
-# Detect partition prefixes (e.g., sda1 vs nvme0n1p1)
+# Detect partition prefixes
 if [[ "$DISK" =~ "nvme" ]]; then
     EFI_PART="${DISK}p1"
     ROOT_PART="${DISK}p2"
@@ -103,81 +106,80 @@ else
     ROOT_PART="${DISK}2"
 fi
 
-echo ":: Formatting partitions..."
+echo ":: Formatting..."
 mkfs.fat -F32 "$EFI_PART"
 mkfs.ext4 -F "$ROOT_PART"
 
-echo ":: Mounting partitions..."
+echo ":: Mounting..."
 mount "$ROOT_PART" /mnt
-mkdir /mnt/boot
+mkdir -p /mnt/boot
 mount "$EFI_PART" /mnt/boot
-
-# ---------------------------------------------------------
-# 3. REPOSITORIES & MIRRORS
-# ---------------------------------------------------------
-echo ":: Configuring Pacman & Mirrors..."
-# Install reflector to get best mirrors
-pacman -Sy --noconfirm reflector
-
-# Backup existing mirrorlist
-cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak
-
-# Fetch latest mirrors (limit to 20 most recent, sort by speed)
-reflector --latest 20 --sort speed --save /etc/pacman.d/mirrorlist
-
-# Enable Multilib (32-bit support) and extra repos
-sed -i '/#\[multilib\]/,+1s/^#//' /etc/pacman.conf
-sed -i '/#\[extra\]/,+1s/^#//' /etc/pacman.conf
-
-# Enable parallel downloads and color output
-sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf
-sed -i 's/^#Color/Color/' /etc/pacman.conf
-
-# Add Chaotic-AUR (extra repo for user convenience)
-echo ":: Adding Chaotic-AUR..."
-pacman-key --init
-pacman -Sy --noconfirm chaotic-keyring
-pacman -Sy --noconfirm chaotic-mirrorlist
-
-# Add Chaotic repo to pacman.conf
-echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /etc/pacman.conf
-
-# Sync databases
-pacman -Sy
 
 # ---------------------------------------------------------
 # 4. BASE INSTALLATION
 # ---------------------------------------------------------
-echo ":: Installing base system packages..."
-# Base packages + Linux API headers for compatibility
-# Installing 'linux' and 'linux-headers' as a fallback/base for DKMS modules
-pacstrap /mnt base base-devel linux linux-headers linux-firmware \
-    networkmanager wpa_supplicant dialog wireless_tools \
+echo ":: Installing Base System (Kernel, Firmware, Tools)..."
+
+# Install base packages first so we have an environment to work in
+pacstrap /mnt base base-devel linux-firmware \
+    networkmanager wpa_supplicant \
     git curl wget vim man-db man-pages texinfo \
-    bash-completion sudo archlinux-keyring \
-    efibootmgr grub os-prober
+    bash-completion sudo efibootmgr grub os-prober
 
 # ---------------------------------------------------------
-# 5. SYSTEM CONFIGURATION (CHROOT)
+# 5. CONFIGURATION (FSTAB & LANGUAGE)
 # ---------------------------------------------------------
-echo ":: Configuring installed system..."
-
-# Generate Fstab
+echo ":: Generating Fstab..."
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# Set Timezone
-ln -sf /usr/share/zoneinfo/$(curl -s http://ip-api.com/line?fields=timezone) /mnt/etc/localtime
-arch-chroot /mnt hwclock --systohc
-
-# Locales (English US and German DE as requested)
 echo ":: Configuring Locales..."
+# Setup locales inside the new system
 sed -i '/en_US\.UTF-8/s/^#//g' /mnt/etc/locale.gen
 sed -i '/de_DE\.UTF-8/s/^#//g' /mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
 echo "KEYMAP=$KEYMAP" > /mnt/etc/vconsole.conf
 
-# Network Configuration
+# ---------------------------------------------------------
+# 6. REPOS & KERNEL (Inside Chroot)
+# ---------------------------------------------------------
+echo ":: Configuring Repositories & Installing Liquorix Kernel..."
+
+# 1. Enable Multilib & Parallel Downloads
+sed -i '/#\[multilib\]/,+1s/^#//' /mnt/etc/pacman.conf
+sed -i '/^#ParallelDownloads/s/^#//' /mnt/etc/pacman.conf
+sed -i '/^#Color/s/^#//' /mnt/etc/pacman.conf
+
+# 2. Install Liquorix via Curl
+# We copy the resolver config to the new system so curl can resolve hosts
+mkdir -p /mnt/run/systemd/resolve/
+cp /run/systemd/resolve/resolv.conf /mnt/run/systemd/resolve/resolv.conf
+
+# Run the installer script
+arch-chroot /mnt /bin/bash -c "curl -s 'https://liquorix.net/install-liquorix.sh' | bash"
+
+# 3. Add Chaotic-AUR (Automated method)
+echo ":: Adding Chaotic-AUR..."
+# We install keyring and mirrorlist manually to avoid "command not found" errors with add-apt-repository
+pacman --root /mnt -Sy --noconfirm chaotic-keyring
+pacman --root /mnt -Sy --noconfirm chaotic-mirrorlist
+
+# Append repo to pacman.conf
+echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /mnt/etc/pacman.conf
+
+# Sync databases
+pacman --root /mnt -Sy
+
+# ---------------------------------------------------------
+# 7. SYSTEM FINALIZATION
+# ---------------------------------------------------------
+echo ":: Finalizing System Settings..."
+
+# Timezone
+ln -sf /usr/share/zoneinfo/$(curl -s http://ip-api.com/line?fields=timezone) /mnt/etc/localtime
+arch-chroot /mnt hwclock --systohc
+
+# Hostname
 echo "$HOSTNAME" > /mnt/etc/hostname
 cat <<EOF > /mnt/etc/hosts
 127.0.0.1   localhost
@@ -185,96 +187,71 @@ cat <<EOF > /mnt/etc/hosts
 127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
 EOF
 
-# Root Password
+# Users & Passwords
 echo "root:$ROOT_PASS" | arch-chroot /mnt chpasswd
-
-# User Creation
 arch-chroot /mnt useradd -m -G wheel,storage,power,audio,video -s /bin/bash "$USERNAME"
 echo "$USERNAME:$USER_PASS" | arch-chroot /mnt chpasswd
-
-# Sudoers
 sed -i '/^# %wheel ALL=(ALL:ALL) ALL/s/^# //' /mnt/etc/sudoers
 
-# Enable NetworkManager
+# Services
 arch-chroot /mnt systemctl enable NetworkManager
 
 # ---------------------------------------------------------
-# 6. BOOTLOADER
+# 8. BOOTLOADER
 # ---------------------------------------------------------
 echo ":: Installing GRUB..."
 arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=ArchLinux
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 # ---------------------------------------------------------
-# 7. HARDWARE COMPATIBILITY & PERFORMANCE
+# 9. HARDWARE & PERFORMANCE
 # ---------------------------------------------------------
-echo ":: Installing Hardware Drivers & Compatibility Packages..."
+echo ":: Installing Drivers & Tweaks..."
 
-# Microcode (detect CPU vendor)
-CPU_VENDOR=$(cat /proc/cpuinfo | grep -m1 "vendor_id" | awk '{print $3}')
+# CPU Microcode
+CPU_VENDOR=$(lscpu | grep -m1 "Vendor ID" | awk '{print $3}')
 if [[ "$CPU_VENDOR" == "GenuineIntel" ]]; then
-    pacstrap /mnt intel-ucode
+    pacman --root /mnt -S --noconfirm intel-ucode
 elif [[ "$CPU_VENDOR" == "AuthenticAMD" ]]; then
-    pacstrap /mnt amd-ucode
+    pacman --root /mnt -S --noconfirm amd-ucode
 fi
 
-# Essential Firmware & Compatibility
-pacstrap /mnt sof-firmware alsa-utils alsa-plugins \
-    cups bluez bluez-utils \
-    ntfs-3g exfatprogs dosfstools mtools \
-    bash-completion
+# Essential Firmware & Libs
+pacman --root /mnt -S --noconfirm sof-firmware alsa-utils bluez bluez-utils cups \
+    ntfs-3g exfatprogs
 
-# Enable Bluetooth and Printing services
 arch-chroot /mnt systemctl enable bluetooth cups
 
-echo ":: Installing Liquorix Kernel..."
-# Use curl to fetch and run the install script inside the chroot
-# We bind mount the host's resolve.conf to ensure networking works inside chroot if needed,
-# though arch-chroot usually handles this.
-# We use 'su -' to ensure environment variables are loaded.
-arch-chroot /mnt /bin/bash -c "curl -s 'https://liquorix.net/install-liquorix.sh' | bash"
-
-# Update GRUB to detect Liquorix
-arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
-
-echo ":: Applying Performance Tweaks..."
-
-# 1. I/O Schedulers: Set 'mq-deadline' or 'bfq' for better responsiveness
-# Creating a tmpfile rule for systemd
+# Performance Tweaks
+# 1. I/O Schedulers
 cat <<EOF > /mnt/etc/tmpfiles.d/ioscheduler.conf
-# Set I/O scheduler for SSDs and HDDs
 ACTION=="add|change", KERNEL=="sd[a-z]|nvme[0-9]n[0-9]", ATTR{queue/scheduler}="mq-deadline"
 EOF
 
-# 2. Sysctl tweaks: Swappiness, Cache Pressure, and Watchdog
+# 2. Sysctl (Swappiness, Watchdog)
 cat <<EOF > /mnt/etc/sysctl.d/99-performance.conf
-# Reduce swap usage (default 60)
 vm.swappiness = 10
-
-# Increase cache pressure (reclaim inode/dentry cache faster)
 vm.vfs_cache_pressure = 50
-
-# Improve kernel responsiveness by reducing watchdog overhead
 kernel.watchdog = 0
-
-# Allow somewhat aggressive file pre-allocation
-fs.prealoc_enforce = 0
 EOF
 
-# 3. Filesystem mount options (add 'noatime' to fstab for root partition)
-# This reduces disk writes by not updating access times on every read
+# 3. Filesystem Optimization (Noatime)
 sed -i 's/relatime/noatime/g' /mnt/etc/fstab
 
+# Rebuild initramfs to include all new drivers and tweaks
+echo ":: Rebuilding Initramfs..."
+arch-chroot /mnt mkinitcpio -P
+
+# Update GRUB again to ensure Liquorix and Microcode are detected
+arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+
 # ---------------------------------------------------------
-# 8. CLEANUP
+# 10. UNMOUNT
 # ---------------------------------------------------------
-echo ":: Unmounting and finishing..."
+echo ":: Unmounting..."
 umount -R /mnt
 
 echo "=========================================="
 echo "   INSTALLATION COMPLETE"
 echo "=========================================="
-echo "System installed successfully."
-echo "You may now reboot."
-echo ""
-echo "Note: Don't forget to install your custom shell (e.g., DankMaterialShell)."
+echo "You can now reboot into your new system."
