@@ -268,6 +268,7 @@ if [[ "$SYSTEM_TYPE" == "2" ]]; then
     # Xorg and Wayland support
     BASE_PACKAGES="$BASE_PACKAGES xorg-server xorg-xinit xorg-xwayland"
     # GPU drivers (detect and install all for compatibility)
+    # NOTE: lib32-mesa removed from here - will be installed in chroot after enabling multilib
     BASE_PACKAGES="$BASE_PACKAGES mesa vulkan-icd-loader"
     # Input
     BASE_PACKAGES="$BASE_PACKAGES libinput xf86-input-libinput"
@@ -303,13 +304,14 @@ LOCALES=("$@")
 
 # Enable multilib repository for 32-bit support (needed for lib32-mesa, Steam, Wine)
 if [[ "${SYSTEM_TYPE}" == "2" ]]; then
-    info "Enabling multilib repository..."
+    echo "Enabling multilib repository..."
     cat >> /etc/pacman.conf << 'EOF'
 
 [multilib]
 Include = /etc/pacman.d/mirrorlist
 EOF
     pacman -Sy
+    echo "Installing 32-bit mesa support..."
     pacman -S --noconfirm lib32-mesa
 fi
 
