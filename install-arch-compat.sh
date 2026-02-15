@@ -192,6 +192,13 @@ genfstab -U /mnt >> /mnt/etc/fstab
 cat > /mnt/chroot_script.sh <<'EOF'
 #!/bin/bash
 
+# Enable error handling
+set -e
+
+echo "=================================="
+echo "Starting chroot configuration..."
+echo "=================================="
+
 # Set timezone
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 hwclock --systohc
@@ -226,6 +233,7 @@ echo "$5:$6" | chpasswd
 echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers
 
 # Install and configure bootloader (GRUB)
+echo "Installing GRUB..."
 pacman -S --noconfirm grub efibootmgr
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
 grub-mkconfig -o /boot/grub/grub.cfg
@@ -239,15 +247,37 @@ sed -i 's/^#VerbosePkgLists/VerbosePkgLists/' /etc/pacman.conf
 echo "Installing Liquorix kernel..."
 curl -s 'https://liquorix.net/install-liquorix.sh' | bash
 
-# Install essential packages for compatibility and performance
+# Update system after kernel installation
+pacman -Syu --noconfirm
+
+# Install essential packages in groups with verification
+echo "=================================="
 echo "Installing essential packages..."
-pacman -S --noconfirm \
+echo "=================================="
+
+# Function to install packages and verify
+install_packages() {
+    local category=$1
+    shift
+    echo "Installing $category packages: $@"
+    pacman -S --noconfirm "$@"
+    if [ $? -eq 0 ]; then
+        echo "✓ $category packages installed successfully"
+    else
+        echo "✗ Failed to install $category packages"
+        exit 1
+    fi
+}
+
+# Install packages by category
+install_packages "System Utilities" \
     htop \
     neofetch \
     man-db \
     man-pages \
     texinfo \
     networkmanager \
+    network-manager-applet \
     openssh \
     reflector \
     git \
@@ -257,7 +287,9 @@ pacman -S --noconfirm \
     zip \
     p7zip \
     ntfs-3g \
-    dosfstools \
+    dosfstools
+
+install_packages "Video Drivers" \
     xf86-video-intel \
     xf86-video-amdgpu \
     xf86-video-nouveau \
@@ -269,57 +301,113 @@ pacman -S --noconfirm \
     libva-intel-driver \
     libva-mesa-driver \
     intel-media-driver \
-    nvidia-utils \
+    nvidia-utils
+
+install_packages "Audio" \
     pipewire \
     pipewire-alsa \
     pipewire-pulse \
     pipewire-jack \
-    wireplumber \
+    wireplumber
+
+install_packages "Printing" \
     cups \
-    cups-pdf \
+    cups-pdf
+
+install_packages "Bluetooth" \
     bluez \
-    bluez-utils \
+    bluez-utils
+
+install_packages "Performance Tools" \
     earlyoom \
     irqbalance \
     tuned \
-    cpupower \
+    cpupower
+
+install_packages "Filesystem Support" \
     btrfs-progs \
     exfatprogs \
     f2fs-tools \
-    xfsprogs \
+    xfsprogs
+
+install_packages "Development" \
     gcc \
     make \
     pkg-config
 
-# Update GRUB after kernel installation
+# Update GRUB after all installations
 grub-mkconfig -o /boot/grub/grub.cfg
 
-# Enable essential services (after packages are installed)
-echo "Enabling services..."
+echo "=================================="
+echo "Verifying installed packages..."
+echo "=================================="
 
-# Check if services exist before enabling
-enable_service() {
-    local service=$1
-    if systemctl list-unit-files | grep -q "$service"; then
-        echo "Enabling $service..."
-        systemctl enable "$service"
-        if [ $? -eq 0 ]; then
-            echo "✓ $service enabled successfully"
-        else
-            echo "✗ Failed to enable $service"
-        fi
+# Check if critical packages are installed
+check_package() {
+    if pacman -Q "$1" &>/dev/null; then
+        echo "✓ $1 is installed"
+        return 0
     else
-        echo "⚠ Service $service not found, skipping..."
+        echo "✗ $1 is NOT installed"
+        return 1
     fi
 }
 
-# Enable all services with verification
-enable_service NetworkManager
-enable_service cups
-enable_service bluetooth
-enable_service earlyoom
-enable_service irqbalance
-enable_service tuned
+# Verify critical packages
+check_package "networkmanager"
+check_package "cups"
+check_package "bluez"
+check_package "earlyoom"
+check_package "irqbalance"
+check_package "tuned"
+
+echo "=================================="
+echo "Enabling services..."
+echo "=================================="
+
+# List all available services for debugging
+echo "Available systemd services:"
+ls -la /usr/lib/systemd/system/ | grep -E "network|cups|bluetooth|earlyoom|irqbalance|tuned" | head -20
+
+# Enable services with error checking
+enable_service() {
+    local service=$1
+    echo "Attempting to enable $service..."
+    
+    # Check if service file exists
+    if [ -f "/usr/lib/systemd/system/$service" ] || [ -f "/etc/systemd/system/$service" ]; then
+        systemctl enable "$service"
+        echo "✓ $service enabled"
+    elif systemctl list-unit-files | grep -q "^$service"; then
+        systemctl enable "$service"
+        echo "✓ $service enabled"
+    else
+        echo "⚠ Service $service not found, searching..."
+        # Search for similar service names
+        found=$(systemctl list-unit-files | grep -i "${service%.service}" | head -n1 | awk '{print $1}')
+        if [ -n "$found" ]; then
+            echo "Found similar service: $found"
+            systemctl enable "$found"
+            echo "✓ $found enabled"
+        else
+            echo "✗ Could not find $service or similar"
+        fi
+    fi
+}
+
+# Enable core services
+enable_service "NetworkManager.service"
+enable_service "cups.service"
+enable_service "bluetooth.service"
+enable_service "earlyoom.service"
+enable_service "irqbalance.service"
+enable_service "tuned.service"
+
+# Create a list of enabled services
+echo "=================================="
+echo "Currently enabled services:"
+systemctl list-unit-files --state=enabled | grep -E "network|cups|bluetooth|earlyoom|irqbalance|tuned" || echo "No matching services found"
+echo "=================================="
 
 # Optimize system performance
 cat >> /etc/sysctl.d/99-performance.conf <<SYSCTL
@@ -339,10 +427,15 @@ SYSCTL
 # Configure CPU governor for performance
 echo 'GOVERNOR="performance"' > /etc/default/cpupower
 
-# Create a list of enabled services for verification
+# Create verification file with installed packages
+pacman -Q > /root/installed_packages.txt
 systemctl list-unit-files --state=enabled > /root/enabled_services.txt
 
-echo "Chroot configuration completed successfully!"
+echo "=================================="
+echo "Chroot configuration completed!"
+echo "Installed packages saved to /root/installed_packages.txt"
+echo "Enabled services saved to /root/enabled_services.txt"
+echo "=================================="
 EOF
 
 # Make the chroot script executable
@@ -352,12 +445,23 @@ chmod +x /mnt/chroot_script.sh
 print_status "Entering chroot and configuring system..."
 arch-chroot /mnt /bin/bash /chroot_script.sh "$LOCALE1" "$LOCALE2" "$HOSTNAME" "$ROOT_PASSWORD" "$USERNAME" "$PASSWORD"
 
-# Check if services were enabled by looking at the enabled services list
-if [ -f "/mnt/root/enabled_services.txt" ]; then
-    print_status "Services were enabled. Here's the list:"
-    cat "/mnt/root/enabled_services.txt" | grep -E "NetworkManager|cups|bluetooth|earlyoom|irqbalance|tuned"
+# Check installation results
+print_status "Checking installation results..."
+
+if [ -f "/mnt/root/installed_packages.txt" ]; then
+    print_status "Packages installed:"
+    echo "----------------------------------------"
+    grep -E "networkmanager|cups|bluez|earlyoom|irqbalance|tuned" "/mnt/root/installed_packages.txt" || print_warning "Critical packages not found in installation list"
+    echo "----------------------------------------"
 else
-    print_warning "Could not verify enabled services. Check manually after boot."
+    print_warning "Package list not found"
+fi
+
+if [ -f "/mnt/root/enabled_services.txt" ]; then
+    print_status "Services enabled:"
+    echo "----------------------------------------"
+    cat "/mnt/root/enabled_services.txt"
+    echo "----------------------------------------"
 fi
 
 # Clean up
@@ -370,23 +474,33 @@ umount -R /mnt
 print_status "Installation complete!"
 print_status "You can now reboot into your new Arch Linux system"
 
-# Final verification instructions
+# Final instructions
 cat << EOF
 
-${GREEN}=== POST-INSTALLATION VERIFICATION ===${NC}
-After reboot, run these commands to verify services are running:
+${GREEN}=== INSTALLATION COMPLETE ===${NC}
 
-${YELLOW}systemctl status NetworkManager${NC}
-${YELLOW}systemctl status cups${NC}
-${YELLOW}systemctl status bluetooth${NC}
-${YELLOW}systemctl status earlyoom${NC}
-${YELLOW}systemctl status irqbalance${NC}
-${YELLOW}systemctl status tuned${NC}
+${YELLOW}After first boot:${NC}
 
-If any services are not enabled, you can enable them with:
-${YELLOW}sudo systemctl enable --now service-name${NC}
+1. Check installed packages:
+   cat /root/installed_packages.txt
 
-${GREEN}Don't forget to install DankMaterialShell manually after first boot!${NC}
-${YELLOW}Reboot command: reboot${NC}
+2. Check enabled services:
+   cat /root/enabled_services.txt
+
+3. If services need to be enabled manually:
+   ${YELLOW}sudo systemctl enable --now NetworkManager${NC}
+   ${YELLOW}sudo systemctl enable --now cups${NC}
+   ${YELLOW}sudo systemctl enable --now bluetooth${NC}
+   ${YELLOW}sudo systemctl enable --now earlyoom${NC}
+   ${YELLOW}sudo systemctl enable --now irqbalance${NC}
+   ${YELLOW}sudo systemctl enable --now tuned${NC}
+
+4. To verify services are running:
+   ${YELLOW}systemctl status NetworkManager cups bluetooth earlyoom irqbalance tuned${NC}
+
+5. Install DankMaterialShell:
+   ${YELLOW}Follow the installation instructions for DankMaterialShell${NC}
+
+${GREEN}Reboot command:${NC} ${YELLOW}reboot${NC}
 
 EOF
