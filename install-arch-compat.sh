@@ -272,7 +272,6 @@ install_packages() {
 # Install packages by category
 install_packages "System Utilities" \
     htop \
-    neofetch \
     man-db \
     man-pages \
     texinfo \
