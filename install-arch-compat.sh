@@ -77,7 +77,7 @@ if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
 fi
 
 # ---------------------------------------------------------
-# 2. PRE-INSTALL SETUP (Mirrors, Clock, Repos)
+# 2. PRE-INSTALL SETUP (Mirrors, Clock, Live Repos)
 # ---------------------------------------------------------
 echo ":: Updating System Clock..."
 timedatectl set-ntp true
@@ -86,22 +86,18 @@ echo ":: Ranking Mirrors..."
 pacman -Sy --noconfirm reflector
 reflector --latest 20 --sort speed --save /etc/pacman.d/mirrorlist
 
-echo ":: Setting up Chaotic-AUR (Live Environment)..."
-# We need this NOW so your DankMaterialShell script can find the repo later.
-# 1. Add the Repo to the Live ISO's pacman.conf
-if ! grep -q "\[chaotic-aur\]" /etc/pacman.conf; then
-    echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /etc/pacman.conf
-fi
-
-# 2. Install the keyring and mirrorlist to the Live ISO
+# Setup Chaotic-AUR on the LIVE ISO environment
+# This ensures your DankMaterialShell script can see these repos later
+echo ":: Setting up Chaotic-AUR for Live Environment..."
 pacman -Sy --noconfirm chaotic-keyring chaotic-mirrorlist || {
-    echo ":: Warning: Could not install chaotic-mirrorlist package. Falling back to direct download..."
-    # Fallback: Download mirrorlist directly so we don't fail
+    echo ":: Fallback: Downloading mirrorlist directly..."
     mkdir -p /etc/pacman.d
     curl -s 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist' -o /etc/pacman.d/chaotic-mirrorlist
 }
 
-# Sync Live ISO DB
+if ! grep -q "\[chaotic-aur\]" /etc/pacman.conf; then
+    echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /etc/pacman.conf
+fi
 pacman -Sy
 
 # ---------------------------------------------------------
@@ -135,14 +131,13 @@ mount "$EFI_PART" /mnt/boot
 # 4. BASE INSTALLATION
 # ---------------------------------------------------------
 echo ":: Installing Base System..."
-
 pacstrap /mnt base base-devel linux-firmware \
     networkmanager wpa_supplicant \
     git curl wget vim man-db man-pages texinfo \
     bash-completion sudo efibootmgr grub os-prober
 
 # ---------------------------------------------------------
-# 5. CONFIGURATION
+# 5. SYSTEM CONFIGURATION (Fstab & Time)
 # ---------------------------------------------------------
 echo ":: Generating Fstab..."
 genfstab -U /mnt >> /mnt/etc/fstab
@@ -153,39 +148,6 @@ sed -i '/de_DE\.UTF-8/s/^#//g' /mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
 echo "KEYMAP=$KEYMAP" > /mnt/etc/vconsole.conf
-
-# ---------------------------------------------------------
-# 6. REPOS & KERNEL (Inside New System)
-# ---------------------------------------------------------
-echo ":: Configuring Repositories for new system..."
-
-# 1. Enable Multilib
-sed -i '/#\[multilib\]/,+1s/^#//' /mnt/etc/pacman.conf
-sed -i '/^#ParallelDownloads/s/^#//' /mnt/etc/pacman.conf
-sed -i '/^#Color/s/^#//' /mnt/etc/pacman.conf
-
-# 2. Install Liquorix Kernel
-mkdir -p /mnt/run/systemd/resolve/
-cp /run/systemd/resolve/resolv.conf /mnt/run/systemd/resolve/resolv.conf
-arch-chroot /mnt /bin/bash -c "curl -s 'https://liquorix.net/install-liquorix.sh' | bash"
-
-# 3. Setup Chaotic-AUR in the NEW system
-echo ":: Installing Chaotic-AUR to new system..."
-# Install packages to the new system (/mnt)
-pacman --root /mnt -Sy --noconfirm chaotic-keyring chaotic-mirrorlist
-
-# Add the repo entry to the new system's pacman.conf
-if ! grep -q "\[chaotic-aur\]" /mnt/etc/pacman.conf; then
-    echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /mnt/etc/pacman.conf
-fi
-
-# Sync new system databases
-pacman --root /mnt -Sy
-
-# ---------------------------------------------------------
-# 7. SYSTEM FINALIZATION
-# ---------------------------------------------------------
-echo ":: Finalizing System Settings..."
 
 # Timezone
 ln -sf /usr/share/zoneinfo/$(curl -s http://ip-api.com/line?fields=timezone) /mnt/etc/localtime
@@ -205,34 +167,62 @@ arch-chroot /mnt useradd -m -G wheel,storage,power,audio,video -s /bin/bash "$US
 echo "$USERNAME:$USER_PASS" | arch-chroot /mnt chpasswd
 sed -i '/^# %wheel ALL=(ALL:ALL) ALL/s/^# //' /mnt/etc/sudoers
 
-# Services
-arch-chroot /mnt systemctl enable NetworkManager
+# ---------------------------------------------------------
+# 6. REPOS & KERNEL (Inside Chroot)
+# ---------------------------------------------------------
+echo ":: Configuring Pacman & Installing Kernels..."
+
+# Enable Multilib & Visuals
+sed -i '/#\[multilib\]/,+1s/^#//' /mnt/etc/pacman.conf
+sed -i '/^#ParallelDownloads/s/^#//' /mnt/etc/pacman.conf
+sed -i '/^#Color/s/^#//' /mnt/etc/pacman.conf
+
+# Prepare network for chroot
+mkdir -p /mnt/run/systemd/resolve/
+cp /run/systemd/resolve/resolv.conf /mnt/run/systemd/resolve/resolv.conf
+
+# Install Liquorix Kernel
+echo ":: Installing Liquorix Kernel..."
+arch-chroot /mnt /bin/bash -c "curl -s 'https://liquorix.net/install-liquorix.sh' | bash"
+
+# Install Chaotic-AUR inside the new system
+echo ":: Installing Chaotic-AUR to new system..."
+# We run pacman inside chroot to ensure hooks execute correctly
+arch-chroot /mnt pacman -Sy --noconfirm chaotic-keyring chaotic-mirrorlist
+
+# Add Repo to config
+if ! grep -q "\[chaotic-aur\]" /mnt/etc/pacman.conf; then
+    echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /mnt/etc/pacman.conf
+fi
+
+# Sync final databases
+arch-chroot /mnt pacman -Sy
 
 # ---------------------------------------------------------
-# 8. BOOTLOADER
+# 7. BOOTLOADER
 # ---------------------------------------------------------
 echo ":: Installing GRUB..."
 arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=ArchLinux
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 # ---------------------------------------------------------
-# 9. HARDWARE & PERFORMANCE
+# 8. HARDWARE & PERFORMANCE
 # ---------------------------------------------------------
 echo ":: Installing Drivers & Tweaks..."
 
 # CPU Microcode
 CPU_VENDOR=$(lscpu | grep -m1 "Vendor ID" | awk '{print $3}')
 if [[ "$CPU_VENDOR" == "GenuineIntel" ]]; then
-    pacman --root /mnt -S --noconfirm intel-ucode
+    arch-chroot /mnt pacman -S --noconfirm intel-ucode
 elif [[ "$CPU_VENDOR" == "AuthenticAMD" ]]; then
-    pacman --root /mnt -S --noconfirm amd-ucode
+    arch-chroot /mnt pacman -S --noconfirm amd-ucode
 fi
 
 # Firmware & Compatibility
-pacman --root /mnt -S --noconfirm sof-firmware alsa-utils bluez bluez-utils cups \
-    ntfs-3g exfatprogs
+arch-chroot /mnt pacman -S --noconfirm sof-firmware alsa-utils bluez bluez-utils cups ntfs-3g exfatprogs
 
-arch-chroot /mnt systemctl enable bluetooth cups
+# Enable Services
+arch-chroot /mnt systemctl enable NetworkManager bluetooth cups
 
 # Performance Tweaks
 cat <<EOF > /mnt/etc/tmpfiles.d/ioscheduler.conf
@@ -251,11 +241,11 @@ sed -i 's/relatime/noatime/g' /mnt/etc/fstab
 echo ":: Rebuilding Initramfs..."
 arch-chroot /mnt mkinitcpio -P
 
-# Final GRUB update
+# Final GRUB Update
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 # ---------------------------------------------------------
-# 10. UNMOUNT
+# 9. UNMOUNT
 # ---------------------------------------------------------
 echo ":: Unmounting..."
 umount -R /mnt
