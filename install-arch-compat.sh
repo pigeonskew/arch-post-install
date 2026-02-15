@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Arch Linux Automated Installation Script
-# This script must be run as root from the Arch ISO
+# Run this script as root from the Arch ISO
 
-set -e  # Exit on error
+set -e
 
 # Color codes for output
 RED='\033[0;31m'
@@ -11,7 +11,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Print colored output
+# Function to print colored output
 print_status() {
     echo -e "${GREEN}[*]${NC} $1"
 }
@@ -30,155 +30,83 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Check if running from Arch ISO
-if [ ! -f /etc/arch-release ]; then
-    print_error "This script must be run from Arch Linux ISO"
-    exit 1
-fi
-
 # Welcome message
 clear
 print_status "Welcome to Arch Linux Automated Installer"
 print_status "This script will guide you through installing Arch Linux"
 echo ""
 
-# User input for configuration
-print_status "Please provide the following information:"
-
-# Hostname
-read -p "Enter hostname [archlinux]: " HOSTNAME
-HOSTNAME=${HOSTNAME:-archlinux}
-
-# Username
+# User input for system configuration
+read -p "Enter hostname: " HOSTNAME
 read -p "Enter username: " USERNAME
-while [ -z "$USERNAME" ]; do
-    print_error "Username cannot be empty"
-    read -p "Enter username: " USERNAME
-done
-
-# Password
-read -s -p "Enter password for $USERNAME: " PASSWORD
+read -s -p "Enter password for $USERNAME: " USER_PASS
 echo ""
-read -s -p "Confirm password: " PASSWORD_CONFIRM
+read -s -p "Enter password for root: " ROOT_PASS
 echo ""
-while [ "$PASSWORD" != "$PASSWORD_CONFIRM" ]; do
-    print_error "Passwords do not match"
-    read -s -p "Enter password for $USERNAME: " PASSWORD
-    echo ""
-    read -s -p "Confirm password: " PASSWORD_CONFIRM
-    echo ""
-done
+read -p "Enter timezone (e.g., America/New_York): " TIMEZONE
 
-# Root password
-read -s -p "Enter root password: " ROOT_PASSWORD
-echo ""
-read -s -p "Confirm root password: " ROOT_PASSWORD_CONFIRM
-echo ""
-while [ "$ROOT_PASSWORD" != "$ROOT_PASSWORD_CONFIRM" ]; do
-    print_error "Passwords do not match"
-    read -s -p "Enter root password: " ROOT_PASSWORD
-    echo ""
-    read -s -p "Confirm root password: " ROOT_PASSWORD_CONFIRM
-    echo ""
-done
-
-# Locale selection
-print_status "Select locale (enter number):"
-echo "1) en_US.UTF-8 (US English)"
-echo "2) en_GB.UTF-8 (British English)"
-echo "3) es_ES.UTF-8 (Spanish)"
-echo "4) de_DE.UTF-8 (German)"
-echo "5) fr_FR.UTF-8 (French)"
-echo "6) Custom"
-read -p "Choice [1]: " LOCALE_CHOICE
-LOCALE_CHOICE=${LOCALE_CHOICE:-1}
-
-case $LOCALE_CHOICE in
-    1) LOCALE1="en_US.UTF-8" ;;
-    2) LOCALE1="en_GB.UTF-8" ;;
-    3) LOCALE1="es_ES.UTF-8" ;;
-    4) LOCALE1="de_DE.UTF-8" ;;
-    5) LOCALE1="fr_FR.UTF-8" ;;
-    6) read -p "Enter first locale: " LOCALE1 ;;
-    *) LOCALE1="en_US.UTF-8" ;;
-esac
-
-print_status "Select second locale (optional, press enter to skip):"
-echo "1) en_US.UTF-8 (US English)"
-echo "2) en_GB.UTF-8 (British English)"
-echo "3) es_ES.UTF-8 (Spanish)"
-echo "4) de_DE.UTF-8 (German)"
-echo "5) fr_FR.UTF-8 (French)"
-echo "6) Custom"
-echo "7) Skip"
-read -p "Choice [7]: " LOCALE2_CHOICE
-LOCALE2_CHOICE=${LOCALE2_CHOICE:-7}
-
-case $LOCALE2_CHOICE in
-    1) LOCALE2="en_US.UTF-8" ;;
-    2) LOCALE2="en_GB.UTF-8" ;;
-    3) LOCALE2="es_ES.UTF-8" ;;
-    4) LOCALE2="de_DE.UTF-8" ;;
-    5) LOCALE2="fr_FR.UTF-8" ;;
-    6) read -p "Enter second locale: " LOCALE2 ;;
-    7) LOCALE2="" ;;
-    *) LOCALE2="" ;;
-esac
-
-# Disk selection
+# Select disk
 print_status "Available disks:"
 lsblk -d -o NAME,SIZE,MODEL | grep -v "loop"
 echo ""
-read -p "Enter disk to install Arch on (e.g., sda, nvme0n1): " DISK
-DISK="/dev/$DISK"
-while [ ! -b "$DISK" ]; do
-    print_error "Disk $DISK not found"
-    read -p "Enter disk to install Arch on: " DISK
-    DISK="/dev/$DISK"
-done
+read -p "Enter disk to install to (e.g., /dev/sda): " DISK
 
-# Confirm destructive action
-print_warning "This will ERASE ALL DATA on $DISK"
+# Confirm disk selection
+print_warning "WARNING: This will erase ALL data on $DISK"
 read -p "Are you sure you want to continue? (yes/no): " CONFIRM
 if [ "$CONFIRM" != "yes" ]; then
     print_error "Installation cancelled"
     exit 1
 fi
 
-# Start installation
-print_status "Starting Arch Linux installation..."
+# Select filesystem
+echo ""
+echo "Select filesystem:"
+echo "1) ext4 (standard)"
+echo "2) btrfs (with compression and snapshots)"
+echo "3) xfs (high performance)"
+read -p "Choice [1-3]: " FS_CHOICE
 
-# Update system clock
-timedatectl set-ntp true
+case $FS_CHOICE in
+    1) FILESYSTEM="ext4" ;;
+    2) FILESYSTEM="btrfs" ;;
+    3) FILESYSTEM="xfs" ;;
+    *) FILESYSTEM="ext4" ;;
+esac
 
 # Partition the disk
 print_status "Partitioning $DISK..."
-parted "$DISK" --script mklabel gpt
-
-# Create partitions
-if [[ "$DISK" == *"nvme"* ]]; then
-    PART_PREFIX="p"
-else
-    PART_PREFIX=""
-fi
-
-# EFI partition (512MB)
-parted "$DISK" --script mkpart ESP fat32 1MB 512MB
-parted "$DISK" --script set 1 esp on
-
-# Root partition (rest of the disk)
-parted "$DISK" --script mkpart primary ext4 512MB 100%
+parted -s "$DISK" mklabel gpt
+parted -s "$DISK" mkpart primary fat32 1MiB 513MiB
+parted -s "$DISK" set 1 esp on
+parted -s "$DISK" mkpart primary $FILESYSTEM 513MiB 100%
 
 # Format partitions
 print_status "Formatting partitions..."
-mkfs.fat -F32 "${DISK}${PART_PREFIX}1"
-mkfs.ext4 -F "${DISK}${PART_PREFIX}2"
+mkfs.fat -F32 "${DISK}1"
 
-# Mount partitions
-print_status "Mounting partitions..."
-mount "${DISK}${PART_PREFIX}2" /mnt
+if [ "$FILESYSTEM" = "btrfs" ]; then
+    mkfs.btrfs -f "${DISK}2"
+    mount "${DISK}2" /mnt
+    btrfs subvolume create /mnt/@
+    btrfs subvolume create /mnt/@home
+    btrfs subvolume create /mnt/@cache
+    btrfs subvolume create /mnt/@log
+    umount /mnt
+    
+    mount -o compress=zstd,subvol=@ "${DISK}2" /mnt
+    mkdir -p /mnt/{home,var/cache,var/log}
+    mount -o compress=zstd,subvol=@home "${DISK}2" /mnt/home
+    mount -o compress=zstd,subvol=@cache "${DISK}2" /mnt/var/cache
+    mount -o compress=zstd,subvol=@log "${DISK}2" /mnt/var/log
+else
+    mkfs.$FILESYSTEM -f "${DISK}2"
+    mount "${DISK}2" /mnt
+fi
+
+# Create and mount EFI partition
 mkdir -p /mnt/boot
-mount "${DISK}${PART_PREFIX}1" /mnt/boot
+mount "${DISK}1" /mnt/boot
 
 # Install base system
 print_status "Installing base system..."
@@ -188,318 +116,235 @@ pacstrap /mnt base base-devel linux-firmware
 print_status "Generating fstab..."
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# Create a script to run inside chroot
-cat > /mnt/chroot_script.sh <<'EOF'
-#!/bin/bash
-
-# Enable error handling
-set -e
-
-echo "=================================="
-echo "Starting chroot configuration..."
-echo "=================================="
-
+# Chroot and configure system
+print_status "Configuring system..."
+cat << EOF | arch-chroot /mnt
 # Set timezone
-ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 hwclock --systohc
 
-# Configure locale
-echo "$1 UTF-8" >> /etc/locale.gen
-if [ -n "$2" ]; then
-    echo "$2 UTF-8" >> /etc/locale.gen
-fi
+# Set locale
+echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+echo "en_US ISO-8859-1" >> /etc/locale.gen
 locale-gen
-
-echo "LANG=$1" > /etc/locale.conf
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
 # Set hostname
-echo "$3" > /etc/hostname
-
-# Set hosts file
-cat > /etc/hosts <<HOSTS
-127.0.0.1   localhost
-::1         localhost
-127.0.1.1   $3.localdomain $3
-HOSTS
+echo "$HOSTNAME" > /etc/hostname
 
 # Set root password
-echo "root:$4" | chpasswd
+echo "root:$ROOT_PASS" | chpasswd
 
 # Create user
-useradd -m -G wheel,audio,video,storage,optical -s /bin/bash $5
-echo "$5:$6" | chpasswd
+useradd -m -G wheel,audio,video,storage,power,rfkill -s /bin/bash $USERNAME
+echo "$USERNAME:$USER_PASS" | chpasswd
 
 # Configure sudo
-echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers
+echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
 
-# Install and configure bootloader (GRUB)
-echo "Installing GRUB..."
-pacman -S --noconfirm grub efibootmgr
-grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
-grub-mkconfig -o /boot/grub/grub.cfg
+# Install bootloader
+bootctl install
 
-# Optimize pacman configuration
-sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf
-sed -i 's/^#Color/Color/' /etc/pacman.conf
-sed -i 's/^#VerbosePkgLists/VerbosePkgLists/' /etc/pacman.conf
+# Create bootloader entry
+cat > /boot/loader/entries/arch.conf << EOF2
+title Arch Linux
+linux /vmlinuz-linux
+initrd /initramfs-linux.img
+options root=PARTUUID=$(blkid -s PARTUUID -o value ${DISK}2) rw
+EOF2
 
-# Install Liquorix kernel using the provided curl command
-echo "Installing Liquorix kernel..."
+# Set default boot entry
+echo "default arch.conf" > /boot/loader/loader.conf
+echo "timeout 3" >> /boot/loader/loader.conf
+
+# Install Liquorix kernel
 curl -s 'https://liquorix.net/install-liquorix.sh' | bash
 
-# Update system after kernel installation
+# Install essential packages
+pacman -S --noconfirm \
+    amd-ucode intel-ucode \
+    networkmanager network-manager-applet \
+    alsa-utils pipewire pipewire-alsa pipewire-pulse pipewire-jack \
+    bluez bluez-utils \
+    vulkan-radeon vulkan-intel nvidia-dkms nvidia-utils \
+    mesa lib32-mesa \
+    xf86-video-amdgpu xf86-video-intel xf86-video-nouveau \
+    xf86-input-libinput \
+    thermald tlp cpupower \
+    earlyoom \
+    preload \
+    irqbalance \
+    ananicy-cpp \
+    ufw \
+    git curl wget \
+    htop btop \
+    neovim vim \
+    zsh fish \
+    firefox \
+    noto-fonts noto-fonts-cjk noto-fonts-emoji noto-fonts-extra \
+    ttf-dejavu ttf-liberation \
+    openssh \
+    dosfstools exfatprogs ntfs-3g f2fs-tools \
+    zip unzip unrar p7zip \
+    reflector \
+    pacman-contrib \
+    cronie \
+    logrotate \
+    acpi acpid \
+    dmidecode \
+    lm_sensors \
+    sysfsutils \
+    tuned \
+    schedtool \
+    linux-zen-headers \
+    dkms
+
+# Enable services
+systemctl enable NetworkManager
+systemctl enable bluetooth
+systemctl enable thermald
+systemctl enable tlp
+systemctl enable earlyoom
+systemctl enable preload
+systemctl enable irqbalance
+systemctl enable ananicy-cpp
+systemctl enable ufw
+systemctl enable cronie
+systemctl enable acpid
+systemctl enable tuned
+systemctl enable reflector.timer
+systemctl enable paccache.timer
+
+# Configure UFW
+ufw default deny incoming
+ufw default allow outgoing
+ufw enable
+
+# Configure tuned
+tuned-adm profile latency-performance
+
+# Add additional repositories
+cat >> /etc/pacman.conf << EOF3
+
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+
+[chaotic-aur]
+SigLevel = Never
+Server = https://repo.chaotic-aur.org/\$repo/\$arch
+
+[archlinuxcn]
+Server = https://repo.archlinuxcn.org/\$arch
+EOF3
+
+# Install Chaotic-AUR keyring
+pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com
+pacman-key --lsign-key 3056513887B78AEB
+pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst'
+pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'
+
+# Install archlinuxcn keyring
+pacman -S --noconfirm archlinuxcn-keyring
+
+# Update system
 pacman -Syu --noconfirm
 
-# Install essential packages in groups with verification
-echo "=================================="
-echo "Installing essential packages..."
-echo "=================================="
+# Install AUR helper (yay)
+cd /tmp
+git clone https://aur.archlinux.org/yay-bin.git
+cd yay-bin
+makepkg -si --noconfirm
+cd /
 
-# Function to install packages and verify
-install_packages() {
-    local category=$1
-    shift
-    echo "Installing $category packages: $@"
-    pacman -S --noconfirm "$@"
-    if [ $? -eq 0 ]; then
-        echo "✓ $category packages installed successfully"
-    else
-        echo "✗ Failed to install $category packages"
-        exit 1
-    fi
-}
+# Install additional performance packages from AUR
+sudo -u $USERNAME yay -S --noconfirm \
+    auto-cpufreq \
+    systemd-boot-manager \
+    gamemode \
+    lib32-gamemode \
+    mangohud \
+    lib32-mangohud \
+    vkbasalt \
+    goverlay \
+    corectrl
 
-# Install packages by category
-install_packages "System Utilities" \
-    htop \
-    man-db \
-    man-pages \
-    texinfo \
-    networkmanager \
-    network-manager-applet \
-    openssh \
-    reflector \
-    git \
-    curl \
-    wget \
-    unzip \
-    zip \
-    p7zip \
-    ntfs-3g \
-    dosfstools
+# Enable auto-cpufreq
+systemctl enable auto-cpufreq
 
-install_packages "Video Drivers" \
-    xf86-video-intel \
-    xf86-video-amdgpu \
-    xf86-video-nouveau \
-    xf86-video-vesa \
-    mesa \
-    vulkan-intel \
-    vulkan-radeon \
-    vulkan-mesa-layer \
-    libva-intel-driver \
-    libva-mesa-driver \
-    intel-media-driver \
-    nvidia-utils
+# Configure corectrl for user
+cat > /etc/polkit-1/rules.d/90-corectrl.rules << EOF4
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.corectrl.helper" &&
+        subject.isInGroup("wheel")) {
+        return polkit.Result.YES;
+    }
+});
+EOF4
 
-install_packages "Audio" \
-    pipewire \
-    pipewire-alsa \
-    pipewire-pulse \
-    pipewire-jack \
-    wireplumber
+# Create swap file if not using btrfs
+if [ "$FILESYSTEM" != "btrfs" ]; then
+    print_status "Creating swap file..."
+    fallocate -l 4G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo "/swapfile none swap defaults 0 0" >> /etc/fstab
+fi
 
-install_packages "Printing" \
-    cups \
-    cups-pdf
-
-install_packages "Bluetooth" \
-    bluez \
-    bluez-utils
-
-install_packages "Performance Tools" \
-    earlyoom \
-    irqbalance \
-    tuned \
-    cpupower
-
-install_packages "Filesystem Support" \
-    btrfs-progs \
-    exfatprogs \
-    f2fs-tools \
-    xfsprogs
-
-install_packages "Development" \
-    gcc \
-    make \
-    pkg-config
-
-# Update GRUB after all installations
-grub-mkconfig -o /boot/grub/grub.cfg
-
-echo "=================================="
-echo "Verifying installed packages..."
-echo "=================================="
-
-# Check if critical packages are installed
-check_package() {
-    if pacman -Q "$1" &>/dev/null; then
-        echo "✓ $1 is installed"
-        return 0
-    else
-        echo "✗ $1 is NOT installed"
-        return 1
-    fi
-}
-
-# Verify critical packages
-check_package "networkmanager"
-check_package "cups"
-check_package "bluez"
-check_package "earlyoom"
-check_package "irqbalance"
-check_package "tuned"
-
-echo "=================================="
-echo "Enabling services..."
-echo "=================================="
-
-# List all available services for debugging
-echo "Available systemd services:"
-ls -la /usr/lib/systemd/system/ | grep -E "network|cups|bluetooth|earlyoom|irqbalance|tuned" | head -20
-
-# Enable services with error checking
-enable_service() {
-    local service=$1
-    echo "Attempting to enable $service..."
-    
-    # Check if service file exists
-    if [ -f "/usr/lib/systemd/system/$service" ] || [ -f "/etc/systemd/system/$service" ]; then
-        systemctl enable "$service"
-        echo "✓ $service enabled"
-    elif systemctl list-unit-files | grep -q "^$service"; then
-        systemctl enable "$service"
-        echo "✓ $service enabled"
-    else
-        echo "⚠ Service $service not found, searching..."
-        # Search for similar service names
-        found=$(systemctl list-unit-files | grep -i "${service%.service}" | head -n1 | awk '{print $1}')
-        if [ -n "$found" ]; then
-            echo "Found similar service: $found"
-            systemctl enable "$found"
-            echo "✓ $found enabled"
-        else
-            echo "✗ Could not find $service or similar"
-        fi
-    fi
-}
-
-# Enable core services
-enable_service "NetworkManager.service"
-enable_service "cups.service"
-enable_service "bluetooth.service"
-enable_service "earlyoom.service"
-enable_service "irqbalance.service"
-enable_service "tuned.service"
-
-# Create a list of enabled services
-echo "=================================="
-echo "Currently enabled services:"
-systemctl list-unit-files --state=enabled | grep -E "network|cups|bluetooth|earlyoom|irqbalance|tuned" || echo "No matching services found"
-echo "=================================="
-
-# Optimize system performance
-cat >> /etc/sysctl.d/99-performance.conf <<SYSCTL
+# Configure sysctl for performance
+cat >> /etc/sysctl.d/99-performance.conf << EOF5
 # Increase system limits
-vm.max_map_count=1048576
+vm.max_map_count=2147483642
+vm.swappiness=10
+vm.vfs_cache_pressure=50
+vm.dirty_ratio=10
+vm.dirty_background_ratio=5
+
+# Network performance
+net.core.rmem_max=134217728
+net.core.wmem_max=134217728
+net.ipv4.tcp_rmem=4096 87380 134217728
+net.ipv4.tcp_wmem=4096 65536 134217728
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+
+# Kernel performance
 kernel.numa_balancing=0
+kernel.sched_autogroup_enabled=0
+EOF5
 
-# Network optimizations
-net.core.rmem_max = 134217728
-net.core.wmem_max = 134217728
-net.ipv4.tcp_rmem = 4096 87380 134217728
-net.ipv4.tcp_wmem = 4096 65536 134217728
-net.core.default_qdisc = fq
-net.ipv4.tcp_congestion_control = bbr
-SYSCTL
+# Configure GRUB if using it instead of systemd-boot
+# (Optional, commented out by default)
+# echo "GRUB_CMDLINE_LINUX_DEFAULT=\"quiet splash mitigations=off nowatchdog\" >> /etc/default/grub"
 
-# Configure CPU governor for performance
-echo 'GOVERNOR="performance"' > /etc/default/cpupower
-
-# Create verification file with installed packages
-pacman -Q > /root/installed_packages.txt
-systemctl list-unit-files --state=enabled > /root/enabled_services.txt
-
-echo "=================================="
-echo "Chroot configuration completed!"
-echo "Installed packages saved to /root/installed_packages.txt"
-echo "Enabled services saved to /root/enabled_services.txt"
-echo "=================================="
 EOF
 
-# Make the chroot script executable
-chmod +x /mnt/chroot_script.sh
-
-# Chroot and run the configuration script with all parameters
-print_status "Entering chroot and configuring system..."
-arch-chroot /mnt /bin/bash /chroot_script.sh "$LOCALE1" "$LOCALE2" "$HOSTNAME" "$ROOT_PASSWORD" "$USERNAME" "$PASSWORD"
-
-# Check installation results
-print_status "Checking installation results..."
-
-if [ -f "/mnt/root/installed_packages.txt" ]; then
-    print_status "Packages installed:"
-    echo "----------------------------------------"
-    grep -E "networkmanager|cups|bluez|earlyoom|irqbalance|tuned" "/mnt/root/installed_packages.txt" || print_warning "Critical packages not found in installation list"
-    echo "----------------------------------------"
-else
-    print_warning "Package list not found"
-fi
-
-if [ -f "/mnt/root/enabled_services.txt" ]; then
-    print_status "Services enabled:"
-    echo "----------------------------------------"
-    cat "/mnt/root/enabled_services.txt"
-    echo "----------------------------------------"
-fi
-
-# Clean up
-rm -f /mnt/chroot_script.sh
-
-# Unmount partitions
+# Unmount and finish
 print_status "Unmounting partitions..."
 umount -R /mnt
 
 print_status "Installation complete!"
 print_status "You can now reboot into your new Arch Linux system"
+print_status "After reboot, you can install DankMaterialShell manually"
 
-# Final instructions
-cat << EOF
-
-${GREEN}=== INSTALLATION COMPLETE ===${NC}
-
-${YELLOW}After first boot:${NC}
-
-1. Check installed packages:
-   cat /root/installed_packages.txt
-
-2. Check enabled services:
-   cat /root/enabled_services.txt
-
-3. If services need to be enabled manually:
-   ${YELLOW}sudo systemctl enable --now NetworkManager${NC}
-   ${YELLOW}sudo systemctl enable --now cups${NC}
-   ${YELLOW}sudo systemctl enable --now bluetooth${NC}
-   ${YELLOW}sudo systemctl enable --now earlyoom${NC}
-   ${YELLOW}sudo systemctl enable --now irqbalance${NC}
-   ${YELLOW}sudo systemctl enable --now tuned${NC}
-
-4. To verify services are running:
-   ${YELLOW}systemctl status NetworkManager cups bluetooth earlyoom irqbalance tuned${NC}
-
-5. Install DankMaterialShell:
-   ${YELLOW}Follow the installation instructions for DankMaterialShell${NC}
-
-${GREEN}Reboot command:${NC} ${YELLOW}reboot${NC}
-
-EOF
+echo ""
+print_warning "Important notes:"
+echo "  - Root password: [as set during installation]"
+echo "  - User password: [as set during installation]"
+echo "  - Hostname: $HOSTNAME"
+echo "  - Filesystem: $FILESYSTEM"
+echo ""
+print_status "Additional repositories added:"
+echo "  - multilib"
+echo "  - chaotic-aur"
+echo "  - archlinuxcn"
+echo ""
+print_status "Performance tweaks applied:"
+echo "  - Liquorix kernel installed"
+echo "  - System services optimized (earlyoom, preload, irqbalance, etc.)"
+echo "  - Sysctl performance parameters configured"
+echo "  - tuned with latency-performance profile"
+echo "  - auto-cpufreq for CPU scaling"
+echo "  - Gaming optimizations (gamemode, mangohud, etc.)"
+echo ""
+print_warning "After first boot, run: sudo auto-cpufreq --install"
