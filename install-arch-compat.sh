@@ -77,14 +77,32 @@ if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
 fi
 
 # ---------------------------------------------------------
-# 2. PRE-INSTALL SETUP (Mirrors & Clock)
+# 2. PRE-INSTALL SETUP (Mirrors, Clock, Repos)
 # ---------------------------------------------------------
 echo ":: Updating System Clock..."
 timedatectl set-ntp true
 
-echo ":: Ranking Mirrors (this may take a moment)..."
+echo ":: Ranking Mirrors..."
 pacman -Sy --noconfirm reflector
 reflector --latest 20 --sort speed --save /etc/pacman.d/mirrorlist
+
+echo ":: Setting up Chaotic-AUR (Live Environment)..."
+# We need this NOW so your DankMaterialShell script can find the repo later.
+# 1. Add the Repo to the Live ISO's pacman.conf
+if ! grep -q "\[chaotic-aur\]" /etc/pacman.conf; then
+    echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /etc/pacman.conf
+fi
+
+# 2. Install the keyring and mirrorlist to the Live ISO
+pacman -Sy --noconfirm chaotic-keyring chaotic-mirrorlist || {
+    echo ":: Warning: Could not install chaotic-mirrorlist package. Falling back to direct download..."
+    # Fallback: Download mirrorlist directly so we don't fail
+    mkdir -p /etc/pacman.d
+    curl -s 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist' -o /etc/pacman.d/chaotic-mirrorlist
+}
+
+# Sync Live ISO DB
+pacman -Sy
 
 # ---------------------------------------------------------
 # 3. PARTITIONING
@@ -93,11 +111,9 @@ echo ":: Partitioning $DISK..."
 wipefs -a "$DISK" &>/dev/null
 sgdisk -Z "$DISK"
 
-# Create partitions: 512MB EFI, Rest Linux
 sgdisk -n 0:0:+512M -t 0:ef00 -c 0:"EFI" "$DISK"
 sgdisk -n 0:0:0 -t 0:8300 -c 0:"Linux" "$DISK"
 
-# Detect partition prefixes
 if [[ "$DISK" =~ "nvme" ]]; then
     EFI_PART="${DISK}p1"
     ROOT_PART="${DISK}p2"
@@ -118,22 +134,20 @@ mount "$EFI_PART" /mnt/boot
 # ---------------------------------------------------------
 # 4. BASE INSTALLATION
 # ---------------------------------------------------------
-echo ":: Installing Base System (Kernel, Firmware, Tools)..."
+echo ":: Installing Base System..."
 
-# Install base packages first so we have an environment to work in
 pacstrap /mnt base base-devel linux-firmware \
     networkmanager wpa_supplicant \
     git curl wget vim man-db man-pages texinfo \
     bash-completion sudo efibootmgr grub os-prober
 
 # ---------------------------------------------------------
-# 5. CONFIGURATION (FSTAB & LANGUAGE)
+# 5. CONFIGURATION
 # ---------------------------------------------------------
 echo ":: Generating Fstab..."
 genfstab -U /mnt >> /mnt/etc/fstab
 
 echo ":: Configuring Locales..."
-# Setup locales inside the new system
 sed -i '/en_US\.UTF-8/s/^#//g' /mnt/etc/locale.gen
 sed -i '/de_DE\.UTF-8/s/^#//g' /mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
@@ -141,33 +155,31 @@ echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
 echo "KEYMAP=$KEYMAP" > /mnt/etc/vconsole.conf
 
 # ---------------------------------------------------------
-# 6. REPOS & KERNEL (Inside Chroot)
+# 6. REPOS & KERNEL (Inside New System)
 # ---------------------------------------------------------
-echo ":: Configuring Repositories & Installing Liquorix Kernel..."
+echo ":: Configuring Repositories for new system..."
 
-# 1. Enable Multilib & Parallel Downloads
+# 1. Enable Multilib
 sed -i '/#\[multilib\]/,+1s/^#//' /mnt/etc/pacman.conf
 sed -i '/^#ParallelDownloads/s/^#//' /mnt/etc/pacman.conf
 sed -i '/^#Color/s/^#//' /mnt/etc/pacman.conf
 
-# 2. Install Liquorix via Curl
-# We copy the resolver config to the new system so curl can resolve hosts
+# 2. Install Liquorix Kernel
 mkdir -p /mnt/run/systemd/resolve/
 cp /run/systemd/resolve/resolv.conf /mnt/run/systemd/resolve/resolv.conf
-
-# Run the installer script
 arch-chroot /mnt /bin/bash -c "curl -s 'https://liquorix.net/install-liquorix.sh' | bash"
 
-# 3. Add Chaotic-AUR (Automated method)
-echo ":: Adding Chaotic-AUR..."
-# We install keyring and mirrorlist manually to avoid "command not found" errors with add-apt-repository
-pacman --root /mnt -Sy --noconfirm chaotic-keyring
-pacman --root /mnt -Sy --noconfirm chaotic-mirrorlist
+# 3. Setup Chaotic-AUR in the NEW system
+echo ":: Installing Chaotic-AUR to new system..."
+# Install packages to the new system (/mnt)
+pacman --root /mnt -Sy --noconfirm chaotic-keyring chaotic-mirrorlist
 
-# Append repo to pacman.conf
-echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /mnt/etc/pacman.conf
+# Add the repo entry to the new system's pacman.conf
+if ! grep -q "\[chaotic-aur\]" /mnt/etc/pacman.conf; then
+    echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /mnt/etc/pacman.conf
+fi
 
-# Sync databases
+# Sync new system databases
 pacman --root /mnt -Sy
 
 # ---------------------------------------------------------
@@ -216,33 +228,30 @@ elif [[ "$CPU_VENDOR" == "AuthenticAMD" ]]; then
     pacman --root /mnt -S --noconfirm amd-ucode
 fi
 
-# Essential Firmware & Libs
+# Firmware & Compatibility
 pacman --root /mnt -S --noconfirm sof-firmware alsa-utils bluez bluez-utils cups \
     ntfs-3g exfatprogs
 
 arch-chroot /mnt systemctl enable bluetooth cups
 
 # Performance Tweaks
-# 1. I/O Schedulers
 cat <<EOF > /mnt/etc/tmpfiles.d/ioscheduler.conf
 ACTION=="add|change", KERNEL=="sd[a-z]|nvme[0-9]n[0-9]", ATTR{queue/scheduler}="mq-deadline"
 EOF
 
-# 2. Sysctl (Swappiness, Watchdog)
 cat <<EOF > /mnt/etc/sysctl.d/99-performance.conf
 vm.swappiness = 10
 vm.vfs_cache_pressure = 50
 kernel.watchdog = 0
 EOF
 
-# 3. Filesystem Optimization (Noatime)
 sed -i 's/relatime/noatime/g' /mnt/etc/fstab
 
-# Rebuild initramfs to include all new drivers and tweaks
+# Rebuild initramfs
 echo ":: Rebuilding Initramfs..."
 arch-chroot /mnt mkinitcpio -P
 
-# Update GRUB again to ensure Liquorix and Microcode are detected
+# Final GRUB update
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 # ---------------------------------------------------------
@@ -254,4 +263,4 @@ umount -R /mnt
 echo "=========================================="
 echo "   INSTALLATION COMPLETE"
 echo "=========================================="
-echo "You can now reboot into your new system."
+echo "System is ready. You can now run your DankMaterialShell script."
