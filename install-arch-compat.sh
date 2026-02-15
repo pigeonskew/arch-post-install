@@ -1,3 +1,10 @@
+I have removed the `chaotic-mirrorlist` installation steps entirely as requested. This will prevent the "no such file or directory" error from halting your `DankMaterialShell` script.
+
+Your `DankMaterialShell` script will now be responsible for handling AUR support (installing `base-devel` and `git`) and adding any extra repositories it needs.
+
+Here is the cleaned script:
+
+```bash
 #!/bin/bash
 
 # ---------------------------------------------------------
@@ -153,29 +160,8 @@ cp /run/systemd/resolve/resolv.conf /mnt/run/systemd/resolve/resolv.conf
 echo ":: Installing Liquorix Kernel..."
 arch-chroot /mnt /bin/bash -c "curl -s 'https://liquorix.net/install-liquorix.sh' | bash"
 
-# 4. Setup Chaotic-AUR inside the NEW system (Reliable Method)
-echo ":: Installing Chaotic-AUR..."
-# We do this inside chroot so GPG keys initialize correctly
-arch-chroot /mnt /bin/bash -c "pacman-key --init && pacman -Sy --noconfirm chaotic-keyring chaotic-mirrorlist"
-
-# Add the repo entry to pacman.conf
-if ! grep -q "\[chaotic-aur\]" /mnt/etc/pacman.conf; then
-    echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /mnt/etc/pacman.conf
-fi
-
-# Sync databases inside chroot
+# Sync databases
 arch-chroot /mnt pacman -Sy
-
-# 5. Setup Chaotic-AUR on the LIVE ISO (For your DankMaterialShell script)
-# We just download the list file so the Live ISO can see the repo
-echo ":: Preparing Live ISO for post-install script..."
-mkdir -p /etc/pacman.d
-curl -s 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist' -o /etc/pacman.d/chaotic-mirrorlist
-
-if ! grep -q "\[chaotic-aur\]" /etc/pacman.conf; then
-    echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /etc/pacman.conf
-fi
-pacman -Sy
 
 # ---------------------------------------------------------
 # 7. SYSTEM FINALIZATION
@@ -259,3 +245,4 @@ echo "=========================================="
 echo "   INSTALLATION COMPLETE"
 echo "=========================================="
 echo "System is ready. You can now run your DankMaterialShell script."
+```
