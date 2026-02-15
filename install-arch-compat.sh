@@ -77,7 +77,7 @@ if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
 fi
 
 # ---------------------------------------------------------
-# 2. PRE-INSTALL SETUP (Mirrors, Clock, Live Repos)
+# 2. PRE-INSTALL SETUP (Mirrors & Clock)
 # ---------------------------------------------------------
 echo ":: Updating System Clock..."
 timedatectl set-ntp true
@@ -85,20 +85,6 @@ timedatectl set-ntp true
 echo ":: Ranking Mirrors..."
 pacman -Sy --noconfirm reflector
 reflector --latest 20 --sort speed --save /etc/pacman.d/mirrorlist
-
-# Setup Chaotic-AUR on the LIVE ISO environment
-# This ensures your DankMaterialShell script can see these repos later
-echo ":: Setting up Chaotic-AUR for Live Environment..."
-pacman -Sy --noconfirm chaotic-keyring chaotic-mirrorlist || {
-    echo ":: Fallback: Downloading mirrorlist directly..."
-    mkdir -p /etc/pacman.d
-    curl -s 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist' -o /etc/pacman.d/chaotic-mirrorlist
-}
-
-if ! grep -q "\[chaotic-aur\]" /etc/pacman.conf; then
-    echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /etc/pacman.conf
-fi
-pacman -Sy
 
 # ---------------------------------------------------------
 # 3. PARTITIONING
@@ -137,7 +123,7 @@ pacstrap /mnt base base-devel linux-firmware \
     bash-completion sudo efibootmgr grub os-prober
 
 # ---------------------------------------------------------
-# 5. SYSTEM CONFIGURATION (Fstab & Time)
+# 5. CONFIGURATION (Fstab & Language)
 # ---------------------------------------------------------
 echo ":: Generating Fstab..."
 genfstab -U /mnt >> /mnt/etc/fstab
@@ -148,6 +134,53 @@ sed -i '/de_DE\.UTF-8/s/^#//g' /mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
 echo "KEYMAP=$KEYMAP" > /mnt/etc/vconsole.conf
+
+# ---------------------------------------------------------
+# 6. REPOS & KERNEL
+# ---------------------------------------------------------
+echo ":: Configuring Repositories..."
+
+# 1. Enable Multilib & Visuals
+sed -i '/#\[multilib\]/,+1s/^#//' /mnt/etc/pacman.conf
+sed -i '/^#ParallelDownloads/s/^#//' /mnt/etc/pacman.conf
+sed -i '/^#Color/s/^#//' /mnt/etc/pacman.conf
+
+# 2. Prepare Network for Chroot
+mkdir -p /mnt/run/systemd/resolve/
+cp /run/systemd/resolve/resolv.conf /mnt/run/systemd/resolve/resolv.conf
+
+# 3. Install Liquorix Kernel
+echo ":: Installing Liquorix Kernel..."
+arch-chroot /mnt /bin/bash -c "curl -s 'https://liquorix.net/install-liquorix.sh' | bash"
+
+# 4. Setup Chaotic-AUR inside the NEW system (Reliable Method)
+echo ":: Installing Chaotic-AUR..."
+# We do this inside chroot so GPG keys initialize correctly
+arch-chroot /mnt /bin/bash -c "pacman-key --init && pacman -Sy --noconfirm chaotic-keyring chaotic-mirrorlist"
+
+# Add the repo entry to pacman.conf
+if ! grep -q "\[chaotic-aur\]" /mnt/etc/pacman.conf; then
+    echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /mnt/etc/pacman.conf
+fi
+
+# Sync databases inside chroot
+arch-chroot /mnt pacman -Sy
+
+# 5. Setup Chaotic-AUR on the LIVE ISO (For your DankMaterialShell script)
+# We just download the list file so the Live ISO can see the repo
+echo ":: Preparing Live ISO for post-install script..."
+mkdir -p /etc/pacman.d
+curl -s 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist' -o /etc/pacman.d/chaotic-mirrorlist
+
+if ! grep -q "\[chaotic-aur\]" /etc/pacman.conf; then
+    echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /etc/pacman.conf
+fi
+pacman -Sy
+
+# ---------------------------------------------------------
+# 7. SYSTEM FINALIZATION
+# ---------------------------------------------------------
+echo ":: Finalizing System Settings..."
 
 # Timezone
 ln -sf /usr/share/zoneinfo/$(curl -s http://ip-api.com/line?fields=timezone) /mnt/etc/localtime
@@ -167,46 +200,18 @@ arch-chroot /mnt useradd -m -G wheel,storage,power,audio,video -s /bin/bash "$US
 echo "$USERNAME:$USER_PASS" | arch-chroot /mnt chpasswd
 sed -i '/^# %wheel ALL=(ALL:ALL) ALL/s/^# //' /mnt/etc/sudoers
 
-# ---------------------------------------------------------
-# 6. REPOS & KERNEL (Inside Chroot)
-# ---------------------------------------------------------
-echo ":: Configuring Pacman & Installing Kernels..."
-
-# Enable Multilib & Visuals
-sed -i '/#\[multilib\]/,+1s/^#//' /mnt/etc/pacman.conf
-sed -i '/^#ParallelDownloads/s/^#//' /mnt/etc/pacman.conf
-sed -i '/^#Color/s/^#//' /mnt/etc/pacman.conf
-
-# Prepare network for chroot
-mkdir -p /mnt/run/systemd/resolve/
-cp /run/systemd/resolve/resolv.conf /mnt/run/systemd/resolve/resolv.conf
-
-# Install Liquorix Kernel
-echo ":: Installing Liquorix Kernel..."
-arch-chroot /mnt /bin/bash -c "curl -s 'https://liquorix.net/install-liquorix.sh' | bash"
-
-# Install Chaotic-AUR inside the new system
-echo ":: Installing Chaotic-AUR to new system..."
-# We run pacman inside chroot to ensure hooks execute correctly
-arch-chroot /mnt pacman -Sy --noconfirm chaotic-keyring chaotic-mirrorlist
-
-# Add Repo to config
-if ! grep -q "\[chaotic-aur\]" /mnt/etc/pacman.conf; then
-    echo -e "\n[chaotic-aur]\nInclude = /etc/pacman.d/chaotic-mirrorlist" >> /mnt/etc/pacman.conf
-fi
-
-# Sync final databases
-arch-chroot /mnt pacman -Sy
+# Services
+arch-chroot /mnt systemctl enable NetworkManager
 
 # ---------------------------------------------------------
-# 7. BOOTLOADER
+# 8. BOOTLOADER
 # ---------------------------------------------------------
 echo ":: Installing GRUB..."
 arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=ArchLinux
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 # ---------------------------------------------------------
-# 8. HARDWARE & PERFORMANCE
+# 9. HARDWARE & PERFORMANCE
 # ---------------------------------------------------------
 echo ":: Installing Drivers & Tweaks..."
 
@@ -219,10 +224,10 @@ elif [[ "$CPU_VENDOR" == "AuthenticAMD" ]]; then
 fi
 
 # Firmware & Compatibility
-arch-chroot /mnt pacman -S --noconfirm sof-firmware alsa-utils bluez bluez-utils cups ntfs-3g exfatprogs
+arch-chroot /mnt pacman -S --noconfirm sof-firmware alsa-utils bluez bluez-utils cups \
+    ntfs-3g exfatprogs
 
-# Enable Services
-arch-chroot /mnt systemctl enable NetworkManager bluetooth cups
+arch-chroot /mnt systemctl enable bluetooth cups
 
 # Performance Tweaks
 cat <<EOF > /mnt/etc/tmpfiles.d/ioscheduler.conf
@@ -245,7 +250,7 @@ arch-chroot /mnt mkinitcpio -P
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
 # ---------------------------------------------------------
-# 9. UNMOUNT
+# 10. UNMOUNT
 # ---------------------------------------------------------
 echo ":: Unmounting..."
 umount -R /mnt
