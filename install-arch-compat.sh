@@ -230,7 +230,17 @@ pacman -S --noconfirm grub efibootmgr
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
 grub-mkconfig -o /boot/grub/grub.cfg
 
+# Optimize pacman configuration
+sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf
+sed -i 's/^#Color/Color/' /etc/pacman.conf
+sed -i 's/^#VerbosePkgLists/VerbosePkgLists/' /etc/pacman.conf
+
+# Install Liquorix kernel using the provided curl command
+echo "Installing Liquorix kernel..."
+curl -s 'https://liquorix.net/install-liquorix.sh' | bash
+
 # Install essential packages for compatibility and performance
+echo "Installing essential packages..."
 pacman -S --noconfirm \
     htop \
     neofetch \
@@ -281,40 +291,35 @@ pacman -S --noconfirm \
     make \
     pkg-config
 
-# Enable essential services (with verification)
+# Update GRUB after kernel installation
+grub-mkconfig -o /boot/grub/grub.cfg
+
+# Enable essential services (after packages are installed)
 echo "Enabling services..."
 
-# Function to enable service with verification
+# Check if services exist before enabling
 enable_service() {
     local service=$1
-    echo "Enabling $service..."
-    systemctl enable "$service"
-    if [ $? -eq 0 ]; then
-        echo "✓ $service enabled successfully"
+    if systemctl list-unit-files | grep -q "$service"; then
+        echo "Enabling $service..."
+        systemctl enable "$service"
+        if [ $? -eq 0 ]; then
+            echo "✓ $service enabled successfully"
+        else
+            echo "✗ Failed to enable $service"
+        fi
     else
-        echo "✗ Failed to enable $service"
+        echo "⚠ Service $service not found, skipping..."
     fi
 }
 
-# Enable all services
+# Enable all services with verification
 enable_service NetworkManager
 enable_service cups
 enable_service bluetooth
 enable_service earlyoom
 enable_service irqbalance
 enable_service tuned
-
-# Optimize pacman configuration
-sed -i 's/^#ParallelDownloads/ParallelDownloads/' /etc/pacman.conf
-sed -i 's/^#Color/Color/' /etc/pacman.conf
-sed -i 's/^#VerbosePkgLists/VerbosePkgLists/' /etc/pacman.conf
-
-# Install Liquorix kernel using the provided curl command
-echo "Installing Liquorix kernel..."
-curl -s 'https://liquorix.net/install-liquorix.sh' | bash
-
-# Update GRUB after kernel installation
-grub-mkconfig -o /boot/grub/grub.cfg
 
 # Optimize system performance
 cat >> /etc/sysctl.d/99-performance.conf <<SYSCTL
@@ -334,8 +339,8 @@ SYSCTL
 # Configure CPU governor for performance
 echo 'GOVERNOR="performance"' > /etc/default/cpupower
 
-# Create a verification file to confirm services were enabled
-touch /root/services_enabled.confirmed
+# Create a list of enabled services for verification
+systemctl list-unit-files --state=enabled > /root/enabled_services.txt
 
 echo "Chroot configuration completed successfully!"
 EOF
@@ -347,11 +352,12 @@ chmod +x /mnt/chroot_script.sh
 print_status "Entering chroot and configuring system..."
 arch-chroot /mnt /bin/bash /chroot_script.sh "$LOCALE1" "$LOCALE2" "$HOSTNAME" "$ROOT_PASSWORD" "$USERNAME" "$PASSWORD"
 
-# Check if the verification file was created
-if [ -f "/mnt/root/services_enabled.confirmed" ]; then
-    print_status "Services were enabled successfully in chroot"
+# Check if services were enabled by looking at the enabled services list
+if [ -f "/mnt/root/enabled_services.txt" ]; then
+    print_status "Services were enabled. Here's the list:"
+    cat "/mnt/root/enabled_services.txt" | grep -E "NetworkManager|cups|bluetooth|earlyoom|irqbalance|tuned"
 else
-    print_warning "Services might not have been enabled properly. Check manually after boot."
+    print_warning "Could not verify enabled services. Check manually after boot."
 fi
 
 # Clean up
@@ -363,10 +369,6 @@ umount -R /mnt
 
 print_status "Installation complete!"
 print_status "You can now reboot into your new Arch Linux system"
-print_status "After reboot, you can verify services with: systemctl status NetworkManager cups bluetooth earlyoom irqbalance tuned"
-
-print_warning "Don't forget to install DankMaterialShell manually after first boot!"
-print_warning "Reboot command: reboot"
 
 # Final verification instructions
 cat << EOF
@@ -383,5 +385,8 @@ ${YELLOW}systemctl status tuned${NC}
 
 If any services are not enabled, you can enable them with:
 ${YELLOW}sudo systemctl enable --now service-name${NC}
+
+${GREEN}Don't forget to install DankMaterialShell manually after first boot!${NC}
+${YELLOW}Reboot command: reboot${NC}
 
 EOF
