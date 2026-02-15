@@ -268,7 +268,7 @@ if [[ "$SYSTEM_TYPE" == "2" ]]; then
     # Xorg and Wayland support
     BASE_PACKAGES="$BASE_PACKAGES xorg-server xorg-xinit xorg-xwayland"
     # GPU drivers (detect and install all for compatibility)
-    BASE_PACKAGES="$BASE_PACKAGES mesa lib32-mesa vulkan-icd-loader"
+    BASE_PACKAGES="$BASE_PACKAGES mesa vulkan-icd-loader"
     # Input
     BASE_PACKAGES="$BASE_PACKAGES libinput xf86-input-libinput"
     # Display manager (lightweight, user will install DankMaterialShell)
@@ -297,8 +297,21 @@ ROOT_PASS="${4}"
 USERNAME="${5}"
 USER_PASS="${6}"
 BOOT_MODE="${7}"
-shift 7
+SYSTEM_TYPE="${8}"
+shift 8
 LOCALES=("$@")
+
+# Enable multilib repository for 32-bit support (needed for lib32-mesa, Steam, Wine)
+if [[ "${SYSTEM_TYPE}" == "2" ]]; then
+    info "Enabling multilib repository..."
+    cat >> /etc/pacman.conf << 'EOF'
+
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+EOF
+    pacman -Sy
+    pacman -S --noconfirm lib32-mesa
+fi
 
 # Time
 ln -sf "/usr/share/zoneinfo/${TIMEZONE}" /etc/localtime
@@ -389,7 +402,7 @@ EOFSCRIPT
 chmod +x /mnt/root/setup.sh
 
 # Run configuration in chroot
-arch-chroot /mnt /root/setup.sh "$HOSTNAME" "$TIMEZONE" "$KEYMAP" "$ROOT_PASS" "$USERNAME" "$USER_PASS" "$BOOT_MODE" "${LOCALES[@]}"
+arch-chroot /mnt /root/setup.sh "$HOSTNAME" "$TIMEZONE" "$KEYMAP" "$ROOT_PASS" "$USERNAME" "$USER_PASS" "$BOOT_MODE" "$SYSTEM_TYPE" "${LOCALES[@]}"
 
 # Cleanup
 rm /mnt/root/setup.sh
@@ -423,5 +436,6 @@ echo "  - PipeWire audio stack"
 echo "  - GPU drivers (Mesa/Vulkan)"
 echo "  - TLP power management"
 echo "  - Ly display manager (if desktop)"
+echo "  - Multilib enabled (for 32-bit apps)"
 echo ""
 success "Enjoy your optimized Arch Linux system!"
