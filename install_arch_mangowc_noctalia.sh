@@ -1,12 +1,12 @@
 #!/bin/bash
-# MangoWC + Noctalia Shell Installation Script for Arch Linux (FIXED)
+# MangoWC + Noctalia Shell Installation Script for Arch Linux (FIXED v2)
 # Run this after base Arch installation (no DE/shell)
 
 set -e  # Exit on error
 
 echo "=========================================="
 echo "  MangoWC + Noctalia Shell Installer"
-echo "  (Fixed for wlroots dependency issues)"
+echo "  (Fixed for Arch's versioned wlroots)"
 echo "=========================================="
 
 # Check if running as root (we don't want that for AUR helpers)
@@ -23,12 +23,12 @@ if ! sudo -v; then
 fi
 
 echo ""
-echo "[1/7] Updating system and installing base dependencies..."
+echo "[1/8] Updating system and installing base dependencies..."
 sudo pacman -Syu --noconfirm
 sudo pacman -S --needed --noconfirm base-devel git
 
 echo ""
-echo "[2/7] Installing AUR helper (yay)..."
+echo "[2/8] Installing AUR helper (yay)..."
 if ! command -v yay &> /dev/null; then
     cd /tmp
     rm -rf yay  # Clean up any previous attempts
@@ -42,24 +42,31 @@ else
 fi
 
 echo ""
-echo "[3/7] Installing official wlroots first (avoiding broken -git version)..."
-# Install official wlroots from repos to satisfy dependencies
-# This prevents yay from trying to build wlroots-asan-git which is broken
-sudo pacman -S --needed --noconfirm wlroots libinput xf86-input-libinput
+echo "[3/8] Installing libinput for trackpad support..."
+# Install libinput and xf86-input-libinput for trackpad support
+# These are the actual drivers needed for trackpads in Wayland
+sudo pacman -S --needed --noconfirm libinput xf86-input-libinput
 
 echo ""
-echo "[4/7] Installing scenefx (required by mangowc-git)..."
-# Install scenefx from AUR (needed for mangowc-git, not wlonly version)
+echo "[4/8] Installing wlroots-git (0.20) from AUR..."
+# Arch official repos only have wlroots0.19 max, but MangoWC needs 0.20
+# We install wlroots-git directly to avoid broken wlroots-asan-git dependency
+# wlroots-git provides libwlroots-0.20.so which MangoWC requires
+yay -S --needed --noconfirm wlroots-git
+
+echo ""
+echo "[5/8] Installing scenefx..."
+# scenefx is required for mangowc-git (the version with effects)
 yay -S --needed --noconfirm scenefx
 
 echo ""
-echo "[5/7] Installing MangoWC (using scenefx version to avoid wlroots-git)..."
-# Use mangowc-git which depends on scenefx + official wlroots
-# instead of mangowc-wlonly-git which requires wlroots-git (broken)
+echo "[6/8] Installing MangoWC..."
+# Use mangowc-git which uses scenefx (recommended for visual effects)
+# This conflicts with mangowc-wlonly-git which requires wlroots-git directly
 yay -S --needed --noconfirm mangowc-git
 
 echo ""
-echo "[6/7] Installing Noctalia Shell and its dependencies..."
+echo "[7/8] Installing Noctalia Shell and its dependencies..."
 # Install Noctalia and quickshell
 yay -S --needed --noconfirm \
     noctalia-shell \
@@ -76,7 +83,7 @@ yay -S --needed --noconfirm \
     evolution-data-server
 
 echo ""
-echo "[7/7] Installing essential desktop applications..."
+echo "[8/8] Installing essential desktop applications..."
 # Terminal, launcher, notifications, clipboard, wallpaper, screenshots
 yay -S --needed --noconfirm \
     foot \
@@ -188,9 +195,10 @@ echo "=========================================="
 echo "  Installation Complete!"
 echo "=========================================="
 echo ""
-echo "TOUCHPAD CONFIGURATION:"
+echo "TRACKPAD CONFIGURATION:"
 echo "------------------------"
-echo "Trackpad settings are configured in: ~/.config/mango/config.conf"
+echo "Trackpad is handled by libinput (installed and configured)."
+echo "Settings are in: ~/.config/mango/config.conf"
 echo ""
 echo "Current settings applied:"
 echo "  - accel_profile=flat (no mouse acceleration)"
