@@ -3,23 +3,31 @@
 # Exit on error
 set -e
 
-echo "--- Starting MangoWC + Noctalia Installation ---"
+echo "--- Advanced MangoWC + Noctalia Setup ---"
 
-# 1. Update system and install base dependencies
-echo "Updating system and installing base-devel/git..."
-sudo pacman -Syu --needed base-devel git libinput xf86-input-libinput mesa
+# 1. Core Dependencies & VM Graphics Drivers
+# Including mesa-utils and guest tools for better VM compatibility
+sudo pacman -Syu --needed base-devel git libinput mesa mesa-utils xdg-desktop-portal-wlr xdg-desktop-portal-gtk seatd foot wmenu
 
-# 2. Install 'yay' as an AUR helper if not present
+# 2. Permissions (Crucial for Wayland/Trackpads)
+echo "Setting up seatd and user permissions..."
+sudo systemctl enable --now seatd
+sudo gpasswd -a $USER seat
+# Note: You may need to reboot after the script for group changes to take effect.
+
+# 3. Install 'yay' AUR Helper
 if ! command -v yay &> /dev/null; then
-    echo "Installing yay (AUR helper)..."
-    cd /tmp
-    git clone https://aur.archlinux.org/yay.git
-    cd yay
-    makepkg -si --noconfirm
+    echo "Installing yay..."
+    cd /tmp && git clone https://aur.archlinux.org/yay.git
+    cd yay && makepkg -si --noconfirm
     cd ~
 fi
 
-# 3. Enable Trackpad (Tap-to-click & Natural Scrolling)
+# 4. Install the Compositor and Shell
+echo "Building MangoWC and Noctalia from AUR..."
+yay -S --noconfirm mangowc-git noctalia-shell-git
+
+# 5. Trackpad Configuration (System-wide)
 echo "Configuring trackpad..."
 sudo mkdir -p /etc/X11/xorg.conf.d/
 sudo tee /etc/X11/xorg.conf.d/30-touchpad.conf > /dev/null <<EOF
@@ -29,22 +37,30 @@ Section "InputClass"
     MatchIsTouchpad "on"
     Option "Tapping" "on"
     Option "NaturalScrolling" "true"
-    Option "ClickMethod" "clickfinger"
 EndSection
 EOF
 
-# 4. Install MangoWC and Noctalia Shell
-# mangowc-git provides the compositor
-# noctalia-shell provides the UI elements
-echo "Installing MangoWC and Noctalia Shell from AUR..."
-yay -S --noconfirm mangowc-git noctalia-shell-git
+# 6. MangoWC Configuration & Noctalia Autostart
+echo "Initializing MangoWC config..."
+mkdir -p ~/.config/mango
+# If the system default exists, copy it; otherwise, create a basic starter
+if [ -f /etc/mango/config.conf ]; then
+    cp /etc/mango/config.conf ~/.config/mango/config.conf
+else
+    # Fallback: Create a minimal config if the package didn't provide one
+    cat <<EOF > ~/.config/mango/config.conf
+# MangoWC Minimal Config
+modifier=Mod4
+terminal=foot
+launcher=wmenu_run
+# Autostart Noctalia Shell
+exec-once=noctalia-shell
+EOF
+fi
 
-# 5. Install basic necessities for a Wayland environment
-# foot: recommended terminal for MangoWC
-# wmenu: for app launching
-echo "Installing environment essentials (foot, wmenu, brightnessctl)..."
-sudo pacman -S --needed foot wmenu brightnessctl wl-clipboard
+# Append Noctalia to the config if it's not already there
+grep -q "noctalia-shell" ~/.config/mango/config.conf || echo "exec-once=noctalia-shell" >> ~/.config/mango/config.conf
 
-echo "--- Installation Complete ---"
-echo "You can now start MangoWC by typing: mangowc"
-echo "Note: You may need to configure noctalia-shell to autostart in ~/.config/mango/config.conf"
+echo "--- Setup Finished ---"
+echo "IMPORTANT: Please REBOOT your machine now."
+echo "After rebooting, log in and type: mango"
