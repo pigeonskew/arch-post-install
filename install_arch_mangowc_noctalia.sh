@@ -51,7 +51,7 @@ yay -S --needed --noconfirm mangowc-git
 
 echo ""
 echo "[5/5] Installing Noctalia Shell and essential desktop applications..."
-yay -S --needed --noconfirm noctalia-shell quickshell brightnessctl imagemagick python ddcutil cliphist cava wlsunset xdg-desktop-portal xdg-desktop-portal-wlr evolution-data-server
+yay -S --needed --noconfirm noctalia-shell brightnessctl imagemagick python ddcutil cliphist cava wlsunset xdg-desktop-portal xdg-desktop-portal-wlr evolution-data-server
 yay -S --needed --noconfirm foot wmenu wl-clipboard grim slurp swaybg mako libnotify polkit-gnome bemenu fuzzel pipewire wireplumber ttf-jetbrains-mono-nerd noto-fonts
 
 echo ""
