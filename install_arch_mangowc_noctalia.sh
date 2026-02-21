@@ -1,5 +1,5 @@
 #!/bin/bash
-# MangoWC + Noctalia Shell Installation Script for Arch Linux (Simplified)
+# MangoWC + Noctalia Shell Installation Script for Arch Linux
 # Run this after base Arch installation (no DE/shell)
 
 set -e  # Exit on error
@@ -23,8 +23,8 @@ fi
 
 echo ""
 echo "[1/5] Updating system and installing base dependencies..."
-sudo pacman -Syu
-sudo pacman -S base-devel git
+sudo pacman -Syu --noconfirm
+sudo pacman -S --needed --noconfirm base-devel git
 
 echo ""
 echo "[2/5] Installing AUR helper (yay)..."
@@ -33,7 +33,7 @@ if ! command -v yay &> /dev/null; then
     rm -rf yay
     git clone https://aur.archlinux.org/yay.git
     cd yay
-    makepkg -si
+    makepkg -si --noconfirm
     cd ~
     rm -rf /tmp/yay
 else
@@ -42,17 +42,17 @@ fi
 
 echo ""
 echo "[3/5] Installing libinput for trackpad support..."
-sudo pacman -S libinput xf86-input-libinput
+sudo pacman -S --needed --noconfirm libinput xf86-input-libinput
 
 echo ""
 echo "[4/5] Installing MangoWC..."
 echo "This will also automatically install wlroots-git and scenefx-git as dependencies."
-yay -S mangowc-git
+yay -S --needed --noconfirm mangowc-git
 
 echo ""
 echo "[5/5] Installing Noctalia Shell and essential desktop applications..."
-yay -S noctalia-shell quickshell brightnessctl imagemagick python ddcutil cliphist cava wlsunset xdg-desktop-portal xdg-desktop-portal-wlr evolution-data-server
-yay -S foot wmenu wl-clipboard grim slurp swaybg mako libnotify polkit-gnome bemenu fuzzel pipewire wireplumber ttf-jetbrains-mono-nerd noto-fonts
+yay -S --needed --noconfirm noctalia-shell quickshell brightnessctl imagemagick python ddcutil cliphist cava wlsunset xdg-desktop-portal xdg-desktop-portal-wlr evolution-data-server
+yay -S --needed --noconfirm foot wmenu wl-clipboard grim slurp swaybg mako libnotify polkit-gnome bemenu fuzzel pipewire wireplumber ttf-jetbrains-mono-nerd noto-fonts
 
 echo ""
 echo "=========================================="
