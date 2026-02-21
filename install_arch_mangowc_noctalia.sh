@@ -1,12 +1,12 @@
 #!/bin/bash
-# MangoWC + Noctalia Shell Installation Script for Arch Linux (FIXED v2)
+# MangoWC + Noctalia Shell Installation Script for Arch Linux (FIXED v3)
 # Run this after base Arch installation (no DE/shell)
 
 set -e  # Exit on error
 
 echo "=========================================="
 echo "  MangoWC + Noctalia Shell Installer"
-echo "  (Fixed for Arch's versioned wlroots)"
+echo "  (Fixed for scenefx-git dependency)"
 echo "=========================================="
 
 # Check if running as root (we don't want that for AUR helpers)
@@ -44,25 +44,23 @@ fi
 echo ""
 echo "[3/8] Installing libinput for trackpad support..."
 # Install libinput and xf86-input-libinput for trackpad support
-# These are the actual drivers needed for trackpads in Wayland
 sudo pacman -S --needed --noconfirm libinput xf86-input-libinput
 
 echo ""
 echo "[4/8] Installing wlroots-git (0.20) from AUR..."
 # Arch official repos only have wlroots0.19 max, but MangoWC needs 0.20
-# We install wlroots-git directly to avoid broken wlroots-asan-git dependency
-# wlroots-git provides libwlroots-0.20.so which MangoWC requires
+# Install wlroots-git to provide libwlroots-0.20.so
 yay -S --needed --noconfirm wlroots-git
 
 echo ""
-echo "[5/8] Installing scenefx..."
-# scenefx is required for mangowc-git (the version with effects)
-yay -S --needed --noconfirm scenefx
+echo "[5/8] Installing scenefx-git..."
+# MangoWC now requires scenefx-git specifically (not versioned scenefx0.4)
+# scenefx-git provides libscenefx-0.4.so
+yay -S --needed --noconfirm scenefx-git
 
 echo ""
 echo "[6/8] Installing MangoWC..."
-# Use mangowc-git which uses scenefx (recommended for visual effects)
-# This conflicts with mangowc-wlonly-git which requires wlroots-git directly
+# Install mangowc-git which uses scenefx-git
 yay -S --needed --noconfirm mangowc-git
 
 echo ""
