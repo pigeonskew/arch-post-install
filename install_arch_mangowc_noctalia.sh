@@ -1,12 +1,12 @@
 #!/bin/bash
-# MangoWC + Noctalia Shell Installation Script for Arch Linux (FIXED v3)
+# MangoWC + Noctalia Shell Installation Script for Arch Linux (Interactive Version)
 # Run this after base Arch installation (no DE/shell)
 
 set -e  # Exit on error
 
 echo "=========================================="
 echo "  MangoWC + Noctalia Shell Installer"
-echo "  (Fixed for scenefx-git dependency)"
+echo "  (Interactive Version - Will Ask for Input)"
 echo "=========================================="
 
 # Check if running as root (we don't want that for AUR helpers)
@@ -24,81 +24,82 @@ fi
 
 echo ""
 echo "[1/8] Updating system and installing base dependencies..."
-sudo pacman -Syu --noconfirm
-sudo pacman -S --needed --noconfirm base-devel git
+echo "You will be prompted to confirm package installations."
+sudo pacman -Syu
+sudo pacman -S base-devel git
 
 echo ""
 echo "[2/8] Installing AUR helper (yay)..."
 if ! command -v yay &> /dev/null; then
+    echo "yay not found. Installing yay..."
     cd /tmp
     rm -rf yay  # Clean up any previous attempts
     git clone https://aur.archlinux.org/yay.git
     cd yay
-    makepkg -si --noconfirm
+    makepkg -si
     cd ~
     rm -rf /tmp/yay
+    echo "yay installed successfully."
 else
     echo "yay already installed, skipping..."
 fi
 
 echo ""
 echo "[3/8] Installing libinput for trackpad support..."
-# Install libinput and xf86-input-libinput for trackpad support
-sudo pacman -S --needed --noconfirm libinput xf86-input-libinput
+echo "Installing libinput and xf86-input-libinput..."
+sudo pacman -S libinput xf86-input-libinput
 
 echo ""
 echo "[4/8] Installing wlroots-git (0.20) from AUR..."
-# Arch official repos only have wlroots0.19 max, but MangoWC needs 0.20
-# Install wlroots-git to provide libwlroots-0.20.so
-yay -S --needed --noconfirm wlroots-git
+echo "This package is required because MangoWC needs wlroots 0.20,"
+echo "but Arch official repos only have up to 0.19."
+yay -S wlroots-git
 
 echo ""
 echo "[5/8] Installing scenefx-git..."
-# MangoWC now requires scenefx-git specifically (not versioned scenefx0.4)
-# scenefx-git provides libscenefx-0.4.so
-yay -S --needed --noconfirm scenefx-git
+echo "This is required for MangoWC's visual effects."
+yay -S scenefx-git
 
 echo ""
 echo "[6/8] Installing MangoWC..."
-# Install mangowc-git which uses scenefx-git
-yay -S --needed --noconfirm mangowc-git
+yay -S mangowc-git
 
 echo ""
 echo "[7/8] Installing Noctalia Shell and its dependencies..."
-# Install Noctalia and quickshell
-yay -S --needed --noconfirm \
-    noctalia-shell \
-    quickshell \
-    brightnessctl \
-    imagemagick \
-    python \
-    ddcutil \
-    cliphist \
-    cava \
-    wlsunset \
-    xdg-desktop-portal \
-    xdg-desktop-portal-wlr \
-    evolution-data-server
+echo "The following packages will be installed:"
+echo "  - noctalia-shell (desktop shell)"
+echo "  - quickshell (framework for Noctalia)"
+echo "  - brightnessctl (brightness control)"
+echo "  - imagemagick (image utilities)"
+echo "  - python (scripting)"
+echo "  - ddcutil (display control)"
+echo "  - cliphist (clipboard history)"
+echo "  - cava (audio visualizer)"
+echo "  - wlsunset (night light)"
+echo "  - xdg-desktop-portal (screen sharing support)"
+echo "  - xdg-desktop-portal-wlr (Wayland portal backend)"
+echo "  - evolution-data-server (calendar/contacts)"
+yay -S noctalia-shell quickshell brightnessctl imagemagick python ddcutil cliphist cava wlsunset xdg-desktop-portal xdg-desktop-portal-wlr evolution-data-server
 
 echo ""
 echo "[8/8] Installing essential desktop applications..."
-# Terminal, launcher, notifications, clipboard, wallpaper, screenshots
-yay -S --needed --noconfirm \
-    foot \
-    wmenu \
-    wl-clipboard \
-    grim \
-    slurp \
-    swaybg \
-    mako \
-    libnotify \
-    polkit-gnome \
-    bemenu \
-    fuzzel \
-    pipewire \
-    wireplumber \
-    ttf-jetbrains-mono-nerd \
-    noto-fonts
+echo "The following packages will be installed:"
+echo "  - foot (terminal emulator)"
+echo "  - wmenu (application launcher)"
+echo "  - wl-clipboard (clipboard utilities)"
+echo "  - grim (screenshot tool)"
+echo "  - slurp (screen region selector)"
+echo "  - swaybg (wallpaper tool)"
+echo "  - mako (notification daemon)"
+echo "  - libnotify (notification library)"
+echo "  - polkit-gnome (authentication agent)"
+echo "  - bemenu (alternative launcher)"
+echo "  - fuzzel (alternative launcher)"
+echo "  - pipewire (audio server)"
+echo "  - wireplumber (audio session manager)"
+echo "  - ttf-jetbrains-mono-nerd (programming font)"
+echo "  - noto-fonts (Unicode font)"
+yay -S foot wmenu wl-clipboard grim slurp swaybg mako libnotify polkit-gnome bemenu fuzzel pipewire wireplumber ttf-jetbrains-mono-nerd noto-fonts
 
 echo ""
 echo "=========================================="
