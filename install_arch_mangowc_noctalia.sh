@@ -1,13 +1,12 @@
 #!/bin/bash
 # MangoWC + Noctalia Shell Installation Script for Arch Linux
 # Run this after base Arch installation (no DE/shell)
-# Updated for enhanced hardware/software compatibility
+# Updated for enhanced hardware/software compatibility + Auto-login
 
 set -e  # Exit on error
 
 echo "=========================================="
 echo "  MangoWC + Noctalia Shell Installer"
-echo "  (Enhanced Compatibility Edition)"
 echo "=========================================="
 
 # Check if running as root (we don't want that for AUR helpers)
@@ -27,7 +26,7 @@ fi
 while true; do sudo -n true; sleep 60; kill -0 "$$" 2>/dev/null & done 2>/dev/null &
 
 echo ""
-echo "[0/6] Enabling necessary repositories (multilib)..."
+echo "[0/7] Enabling necessary repositories (multilib)..."
 # Enable multilib repo for broader software compatibility (Steam, proprietary apps)
 if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
     echo "Enabling [multilib] repository..."
@@ -37,12 +36,12 @@ else
 fi
 
 echo ""
-echo "[1/6] Updating system and installing base dependencies..."
+echo "[1/7] Updating system and installing base dependencies..."
 sudo pacman -Syu --noconfirm
 sudo pacman -S --needed --noconfirm base-devel git
 
 echo ""
-echo "[2/6] Installing AUR helper (yay)..."
+echo "[2/7] Installing AUR helper (yay)..."
 if ! command -v yay &> /dev/null; then
     cd /tmp
     rm -rf yay
@@ -56,7 +55,7 @@ else
 fi
 
 echo ""
-echo "[3/6] Installing Hardware Compatibility Packages..."
+echo "[3/7] Installing Hardware Compatibility Packages..."
 # Firmware, Audio, Network, Bluetooth, Graphics, XWayland
 sudo pacman -S --needed --noconfirm \
     linux-firmware \
@@ -68,7 +67,7 @@ sudo pacman -S --needed --noconfirm \
     libinput xf86-input-libinput
 
 echo ""
-echo "[4/6] Installing Desktop Utilities & Fonts..."
+echo "[4/7] Installing Desktop Utilities & Fonts..."
 # Polkit, Clipboard, Notifications, Terminal, Launcher, Fonts, Screen Lock
 sudo pacman -S --needed --noconfirm \
     polkit-gnome \
@@ -88,12 +87,42 @@ sudo systemctl enable NetworkManager
 sudo systemctl enable bluetooth
 
 echo ""
-echo "[5/6] Installing MangoWC..."
+echo "[5/7] Installing MangoWC..."
 yay -S --needed --noconfirm mangowc-git
 
 echo ""
-echo "[6/6] Installing Noctalia Shell..."
+echo "[6/7] Installing Noctalia Shell..."
 yay -S --needed --noconfirm noctalia-shell
+
+echo ""
+echo "[7/7] Configuring Auto-start on Login..."
+# Add MangoWC autostart to .bash_profile if not already present
+# This ensures Mango starts automatically when you log in on tty1
+if [ -f ~/.bash_profile ]; then
+    if ! grep -q "exec mango" ~/.bash_profile; then
+        echo "" >> ~/.bash_profile
+        echo "# Autostart MangoWC on tty1" >> ~/.bash_profile
+        echo "if [ -z \"\$DISPLAY\" ] && [ \"\$(tty)\" = \"/dev/tty1\" ]; then" >> ~/.bash_profile
+        echo "    exec mango" >> ~/.bash_profile
+        echo "fi" >> ~/.bash_profile
+        echo "MangoWC autostart added to ~/.bash_profile"
+    else
+        echo "MangoWC autostart already configured in ~/.bash_profile"
+    fi
+else
+    # Create .bash_profile if it doesn't exist
+    cat > ~/.bash_profile << 'EOF'
+# ~/.bash_profile
+
+[[ -f ~/.bashrc ]] && . ~/.bashrc
+
+# Autostart MangoWC on tty1
+if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
+    exec mango
+fi
+EOF
+    echo "Created ~/.bash_profile with MangoWC autostart"
+fi
 
 echo ""
 echo "=========================================="
@@ -200,7 +229,7 @@ echo "  Installation Complete!"
 echo "=========================================="
 echo ""
 echo "IMPORTANT: Please reboot your system now."
-echo "After reboot, start the desktop by running: mango"
+echo "After reboot, log in on tty1 and MangoWC will start automatically."
 echo ""
 echo "Hardware & Software Improvements Added:"
 echo "  - Multilib repo enabled"
@@ -210,8 +239,11 @@ echo "  - NetworkManager & Bluetooth"
 echo "  - Vulkan & Mesa Graphics"
 echo "  - XWayland for X11 app support"
 echo "  - Fonts & Clipboard Manager"
+echo "  - Auto-start configured in ~/.bash_profile"
 echo ""
 echo "Trackpad settings configured in: ~/.config/mango/config.conf"
 echo "  - tap_to_click enabled"
 echo "  - natural_scrolling enabled"
+echo ""
+echo "To disable auto-start, remove the 'exec mango' block from ~/.bash_profile"
 echo ""
