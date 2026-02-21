@@ -1,12 +1,13 @@
 #!/bin/bash
 # MangoWC + Noctalia Shell Installation Script for Arch Linux
 # Run this after base Arch installation (no DE/shell)
-# Updated for enhanced hardware/software compatibility + Auto-login
+# Updated: No Mako, No Keybindings, Auto-start enabled
 
 set -e  # Exit on error
 
 echo "=========================================="
 echo "  MangoWC + Noctalia Shell Installer"
+echo "  (Enhanced Compatibility Edition)"
 echo "=========================================="
 
 # Check if running as root (we don't want that for AUR helpers)
@@ -68,11 +69,10 @@ sudo pacman -S --needed --noconfirm \
 
 echo ""
 echo "[4/7] Installing Desktop Utilities & Fonts..."
-# Polkit, Clipboard, Notifications, Terminal, Launcher, Fonts, Screen Lock
+# Polkit, Clipboard, Terminal, Launcher, Fonts, Screen Lock (Mako excluded)
 sudo pacman -S --needed --noconfirm \
     polkit-gnome \
     cliphist wl-clipboard \
-    mako \
     foot \
     wmenu \
     grim slurp \
@@ -132,9 +132,8 @@ echo "=========================================="
 # Create config directories
 mkdir -p ~/.config/mango
 mkdir -p ~/.config/quickshell/noctalia-shell
-mkdir -p ~/.config/mako
 
-# Create minimal MangoWC config with trackpad support
+# Create minimal MangoWC config (No keybindings, just input & autostart)
 if [ ! -f ~/.config/mango/config.conf ]; then
     echo "Creating minimal MangoWC config..."
     cat > ~/.config/mango/config.conf << 'EOF'
@@ -149,33 +148,15 @@ natural_scrolling=1
 
 # Autostart script
 exec-once=~/.config/mango/autostart.sh
-
-# Basic keybindings
-bind=SUPER,Return,exec,foot
-bind=SUPER,Q,kill
-bind=SUPER,M,exit
-bind=SUPER,Space,exec,wmenu-run
-bind=SUPER,1,view,1
-bind=SUPER,2,view,2
-bind=SUPER,3,view,3
-bind=SUPER,4,view,4
-bind=SUPER,5,view,5
-
-# Screenshot bindings
-bind=SUPER,Print,exec,grim -g "$(slurp)" - | wl-copy
-bind=,Print,exec,grim - | wl-copy
 EOF
 fi
 
-# Create MangoWC autostart script for Noctalia integration
+# Create MangoWC autostart script for Noctalia integration (No Mako)
 cat > ~/.config/mango/autostart.sh << 'EOF'
 #!/bin/bash
 # Audio
 pipewire &
 wireplumber &
-
-# Notifications
-mako &
 
 # Authentication Agent
 /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 &
@@ -189,27 +170,9 @@ qs -c noctalia-shell &
 
 # Environment variables for GTK/Qt apps
 dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP=wlroots
-
-# Screen lock idle (optional, requires swayidle if added)
-# swayidle -w timeout 300 'swaylock -f -c 000000' timeout 600 'mangoctl output power off' resume 'mangoctl output power on'
 EOF
 
 chmod +x ~/.config/mango/autostart.sh
-
-# Create basic Mako config for notifications
-if [ ! -f ~/.config/mako/config ]; then
-    cat > ~/.config/mako/config << 'EOF'
-background-color=#285577
-text-color=#ffffff
-width=300
-height=100
-margin=10
-padding=10
-border-size=2
-border-color=#4488bb
-font=Sans 12
-EOF
-fi
 
 # Ensure autostart is in config
 if [ -f ~/.config/mango/config.conf ]; then
@@ -241,9 +204,10 @@ echo "  - XWayland for X11 app support"
 echo "  - Fonts & Clipboard Manager"
 echo "  - Auto-start configured in ~/.bash_profile"
 echo ""
-echo "Trackpad settings configured in: ~/.config/mango/config.conf"
-echo "  - tap_to_click enabled"
-echo "  - natural_scrolling enabled"
+echo "Configuration files created:"
+echo "  - ~/.config/mango/config.conf (Input settings only)"
+echo "  - ~/.config/mango/autostart.sh"
 echo ""
-echo "To disable auto-start, remove the 'exec mango' block from ~/.bash_profile"
+echo "Note: No keybindings or notification daemon (mako) were configured."
+echo "You can customize keybindings in ~/.config/mango/config.conf"
 echo ""
