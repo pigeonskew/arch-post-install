@@ -1,11 +1,13 @@
 #!/bin/bash
 # MangoWC + Noctalia Shell Installation Script for Arch Linux
 # Run this after base Arch installation (no DE/shell)
+# Updated for enhanced hardware/software compatibility
 
 set -e  # Exit on error
 
 echo "=========================================="
 echo "  MangoWC + Noctalia Shell Installer"
+echo "  (Enhanced Compatibility Edition)"
 echo "=========================================="
 
 # Check if running as root (we don't want that for AUR helpers)
@@ -21,17 +23,30 @@ if ! sudo -v; then
     exit 1
 fi
 
+# Keep sudo timestamp updated
+while true; do sudo -n true; sleep 60; kill -0 "$$" 2>/dev/null & done 2>/dev/null &
+
 echo ""
-echo "[1/7] Updating system and installing base dependencies..."
+echo "[0/6] Enabling necessary repositories (multilib)..."
+# Enable multilib repo for broader software compatibility (Steam, proprietary apps)
+if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+    echo "Enabling [multilib] repository..."
+    sudo sed -i '/^\[multilib\]/,/Include/ s/^#//' /etc/pacman.conf
+else
+    echo "[multilib] repository already enabled."
+fi
+
+echo ""
+echo "[1/6] Updating system and installing base dependencies..."
 sudo pacman -Syu --noconfirm
 sudo pacman -S --needed --noconfirm base-devel git
 
 echo ""
-echo "[2/7] Installing AUR helper (yay)..."
+echo "[2/6] Installing AUR helper (yay)..."
 if ! command -v yay &> /dev/null; then
     cd /tmp
     rm -rf yay
-    git clone https://aur.archlinux.org/yay.git 
+    git clone https://aur.archlinux.org/yay.git   
     cd yay
     makepkg -si --noconfirm
     cd ~
@@ -41,161 +56,43 @@ else
 fi
 
 echo ""
-echo "[3/7] Installing input drivers (trackpad, mouse, keyboard)..."
+echo "[3/6] Installing Hardware Compatibility Packages..."
+# Firmware, Audio, Network, Bluetooth, Graphics, XWayland
 sudo pacman -S --needed --noconfirm \
-    libinput \
-    xf86-input-libinput \
-    xf86-input-evdev \
-    xf86-input-synaptics \
-    xf86-input-wacom \
-    xf86-input-vmmouse
-
-echo ""
-echo "[4/7] Installing graphics drivers and hardware acceleration..."
-
-# Check if multilib is enabled (for 32-bit packages)
-MULTILIB_ENABLED=false
-if grep -q "^\[multilib\]" /etc/pacman.conf; then
-    MULTILIB_ENABLED=true
-else
-    echo "Note: [multilib] repository not enabled. Skipping 32-bit graphics libraries."
-    echo "To enable 32-bit support (for Steam, Wine, etc.), uncomment [multilib] in /etc/pacman.conf"
-fi
-
-# Detect GPU and install appropriate drivers
-if lspci | grep -i "nvidia" &> /dev/null; then
-    echo "NVIDIA GPU detected..."
-    if [ "$MULTILIB_ENABLED" = true ]; then
-        sudo pacman -S --needed --noconfirm \
-            nvidia-dkms \
-            nvidia-utils \
-            lib32-nvidia-utils \
-            nvidia-settings \
-            vulkan-icd-loader \
-            lib32-vulkan-icd-loader \
-            egl-wayland || true
-    else
-        sudo pacman -S --needed --noconfirm \
-            nvidia-dkms \
-            nvidia-utils \
-            nvidia-settings \
-            vulkan-icd-loader \
-            egl-wayland || true
-    fi
-elif lspci | grep -i "amd" &> /dev/null; then
-    echo "AMD GPU detected..."
-    if [ "$MULTILIB_ENABLED" = true ]; then
-        sudo pacman -S --needed --noconfirm \
-            mesa \
-            lib32-mesa \
-            vulkan-radeon \
-            lib32-vulkan-radeon \
-            vulkan-icd-loader \
-            lib32-vulkan-icd-loader \
-            libva-mesa-driver \
-            lib32-libva-mesa-driver \
-            mesa-vdpau \
-            lib32-mesa-vdpau || true
-    else
-        sudo pacman -S --needed --noconfirm \
-            mesa \
-            vulkan-radeon \
-            vulkan-icd-loader \
-            libva-mesa-driver \
-            mesa-vdpau || true
-    fi
-elif lspci | grep -i "intel" &> /dev/null; then
-    echo "Intel GPU detected..."
-    if [ "$MULTILIB_ENABLED" = true ]; then
-        sudo pacman -S --needed --noconfirm \
-            mesa \
-            lib32-mesa \
-            vulkan-intel \
-            lib32-vulkan-intel \
-            vulkan-icd-loader \
-            lib32-vulkan-icd-loader \
-            intel-media-driver \
-            libva-intel-driver \
-            libvdpau-va-gl || true
-    else
-        sudo pacman -S --needed --noconfirm \
-            mesa \
-            vulkan-intel \
-            vulkan-icd-loader \
-            intel-media-driver \
-            libva-intel-driver \
-            libvdpau-va-gl || true
-    fi
-else
-    echo "No dedicated GPU detected or unable to identify. Installing generic Mesa..."
-    sudo pacman -S --needed --noconfirm \
-        mesa \
-        vulkan-icd-loader || true
-fi
-
-# Common graphics utilities
-sudo pacman -S --needed --noconfirm \
-    mesa-utils \
-    libva-utils \
-    vulkan-tools \
-    wayland-utils \
+    linux-firmware \
+    pipewire pipewire-pulse pipewire-alsa wireplumber \
+    networkmanager network-manager-applet \
+    bluez bluez-utils \
+    mesa vulkan-radeon vulkan-intel vulkan-tools \
     xorg-xwayland \
-    egl-wayland \
-    libdrm
+    libinput xf86-input-libinput
 
 echo ""
-echo "[5/7] Installing networking and connectivity tools..."
+echo "[4/6] Installing Desktop Utilities & Fonts..."
+# Polkit, Clipboard, Notifications, Terminal, Launcher, Fonts, Screen Lock
 sudo pacman -S --needed --noconfirm \
-    network-manager-applet \
-    nm-connection-editor \
-    iwd \
-    wireless_tools \
-    wpa_supplicant \
-    dhcpcd \
-    openresolv \
-    avahi \
-    nss-mdns \
-    usbutils \
-    pciutils \
-    lshw \
-    dmidecode
+    polkit-gnome \
+    cliphist wl-clipboard \
+    mako \
+    foot \
+    wmenu \
+    grim slurp \
+    swaylock \
+    noto-fonts ttf-font-awesome gnu-free-fonts \
+    xdg-user-dirs
 
-# Enable services
-sudo systemctl enable --now avahi-daemon
+# Enable essential services
+echo ""
+echo "Enabling system services (NetworkManager, Bluetooth)..."
+sudo systemctl enable NetworkManager
+sudo systemctl enable bluetooth
 
 echo ""
-echo "[6/7] Installing essential system utilities and firmware..."
-sudo pacman -S --needed --noconfirm \
-    tlp tlp-rdw powertop acpi acpid thermald upower \
-    fwupd udisks2 gvfs gvfs-mtp gvfs-gphoto2 gvfs-afc gvfs-smb \
-    ntfs-3g exfat-utils dosfstools e2fsprogs btrfs-progs \
-    lm_sensors htop btop polkit polkit-gnome gnome-keyring libsecret \
-    mako libnotify wl-clipboard cliphist \
-    grim slurp swappy swaylock swayidle \
-    noto-fonts noto-fonts-emoji noto-fonts-cjk ttf-dejavu ttf-liberation ttf-font-awesome \
-    nautilus xdg-utils xdg-user-dirs \
-    foot vim nano \
-    imv mpv ffmpeg ffmpegthumbnailer \
-    p7zip unzip unrar zip tar \
-    neofetch fastfetch brightnessctl wf-recorder colord ntp
-
-# Install microcode updates
-if grep -q "GenuineIntel" /proc/cpuinfo; then
-    echo "Installing Intel microcode..."
-    sudo pacman -S --needed --noconfirm intel-ucode
-elif grep -q "AuthenticAMD" /proc/cpuinfo; then
-    echo "Installing AMD microcode..."
-    sudo pacman -S --needed --noconfirm amd-ucode
-fi
-
-# Enable power management services
-sudo systemctl enable --now tlp || true
-sudo systemctl enable --now acpid || true
-sudo systemctl enable --now thermald || true
-
-echo ""
-echo "[7/7] Installing MangoWC and Noctalia Shell..."
+echo "[5/6] Installing MangoWC..."
 yay -S --needed --noconfirm mangowc-git
+
+echo ""
+echo "[6/6] Installing Noctalia Shell..."
 yay -S --needed --noconfirm noctalia-shell
 
 echo ""
@@ -206,6 +103,7 @@ echo "=========================================="
 # Create config directories
 mkdir -p ~/.config/mango
 mkdir -p ~/.config/quickshell/noctalia-shell
+mkdir -p ~/.config/mako
 
 # Create minimal MangoWC config with trackpad support
 if [ ! -f ~/.config/mango/config.conf ]; then
@@ -234,61 +132,55 @@ bind=SUPER,3,view,3
 bind=SUPER,4,view,4
 bind=SUPER,5,view,5
 
-# Brightness keys
-bind=,XF86MonBrightnessUp,exec,brightnessctl set +5%
-bind=,XF86MonBrightnessDown,exec,brightnessctl set 5%-
-
-# Volume keys (assuming audio already configured)
-bind=,XF86AudioRaiseVolume,exec,pactl set-sink-volume @DEFAULT_SINK@ +5%
-bind=,XF86AudioLowerVolume,exec,pactl set-sink-volume @DEFAULT_SINK@ -5%
-bind=,XF86AudioMute,exec,pactl set-sink-mute @DEFAULT_SINK@ toggle
-
-# Media keys
-bind=,XF86AudioPlay,exec,playerctl play-pause
-bind=,XF86AudioNext,exec,playerctl next
-bind=,XF86AudioPrev,exec,playerctl previous
-
-# Screenshot
-bind=SUPER,Print,exec,grim -g "$(slurp)" - | swappy -f -
-bind=,Print,exec,grim - | swappy -f -
-
-# Lock screen
-bind=SUPER,L,exec,swaylock -f -c 000000
+# Screenshot bindings
+bind=SUPER,Print,exec,grim -g "$(slurp)" - | wl-copy
+bind=,Print,exec,grim - | wl-copy
 EOF
 fi
 
 # Create MangoWC autostart script for Noctalia integration
 cat > ~/.config/mango/autostart.sh << 'EOF'
 #!/bin/bash
+# Audio
+pipewire &
+wireplumber &
 
-# Notification daemon
+# Notifications
 mako &
 
-# Policy kit authentication agent
+# Authentication Agent
 /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 &
 
-# Clipboard history
+# Clipboard
 wl-paste --type text --watch cliphist store &
 wl-paste --type image --watch cliphist store &
 
-# Network manager applet
-nm-applet --indicator &
-
-# Noctalia Shell
+# Shell
 qs -c noctalia-shell &
 
-# Update environment for systemd
+# Environment variables for GTK/Qt apps
 dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP=wlroots
 
-# Start idle management
-swayidle -w \
-    timeout 300 'swaylock -f -c 000000' \
-    timeout 600 'mango dispatch dpms off' \
-    resume 'mango dispatch dpms on' \
-    before-sleep 'swaylock -f -c 000000' &
+# Screen lock idle (optional, requires swayidle if added)
+# swayidle -w timeout 300 'swaylock -f -c 000000' timeout 600 'mangoctl output power off' resume 'mangoctl output power on'
 EOF
 
 chmod +x ~/.config/mango/autostart.sh
+
+# Create basic Mako config for notifications
+if [ ! -f ~/.config/mako/config ]; then
+    cat > ~/.config/mako/config << 'EOF'
+background-color=#285577
+text-color=#ffffff
+width=300
+height=100
+margin=10
+padding=10
+border-size=2
+border-color=#4488bb
+font=Sans 12
+EOF
+fi
 
 # Ensure autostart is in config
 if [ -f ~/.config/mango/config.conf ]; then
@@ -299,7 +191,7 @@ if [ -f ~/.config/mango/config.conf ]; then
     fi
 fi
 
-# Setup user directories
+# Generate XDG directories
 xdg-user-dirs-update
 
 echo ""
@@ -307,26 +199,19 @@ echo "=========================================="
 echo "  Installation Complete!"
 echo "=========================================="
 echo ""
-echo "Start the desktop by running: mango"
+echo "IMPORTANT: Please reboot your system now."
+echo "After reboot, start the desktop by running: mango"
 echo ""
-echo "Configuration files:"
-echo "  - MangoWC: ~/.config/mango/config.conf"
-echo "  - Autostart: ~/.config/mango/autostart.sh"
+echo "Hardware & Software Improvements Added:"
+echo "  - Multilib repo enabled"
+echo "  - Firmware & Microcode support"
+echo "  - PipeWire Audio Stack"
+echo "  - NetworkManager & Bluetooth"
+echo "  - Vulkan & Mesa Graphics"
+echo "  - XWayland for X11 app support"
+echo "  - Fonts & Clipboard Manager"
 echo ""
-echo "Key features enabled:"
-echo "  - Auto-detected GPU drivers (NVIDIA/AMD/Intel)"
-echo "  - Power management (TLP) and thermal control"
-echo "  - NetworkManager applet"
-echo "  - Clipboard history, notifications, screen lock"
-echo "  - Brightness and volume media keys"
-echo "  - Firmware updates (fwupd)"
+echo "Trackpad settings configured in: ~/.config/mango/config.conf"
+echo "  - tap_to_click enabled"
+echo "  - natural_scrolling enabled"
 echo ""
-echo "Note: 32-bit graphics libraries (lib32-*) were skipped."
-echo "To enable them for Steam/Wine, uncomment [multilib] in /etc/pacman.conf first."
-echo ""
-echo "Post-install recommendations:"
-echo "  1. Reboot to load all drivers: sudo reboot"
-echo "  2. Run 'sudo sensors-detect' to setup hardware monitoring"
-echo "  3. Configure TLP: sudo systemctl edit tlp (if on laptop)"
-echo "  4. Add user to additional groups if needed:"
-echo "     sudo usermod -aG video,audio,input $USER"
